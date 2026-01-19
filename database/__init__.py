@@ -5,6 +5,15 @@ from .db import (
     get_all_users,
     update_user_password,
     delete_user,
+    # SKU functions
+    add_sku,
+    add_skus_bulk,
+    delete_sku,
+    get_all_skus,
+    search_skus,
+    is_valid_sku,
+    get_sku_count,
+    clear_all_skus,
 )
 from .inventory import (
     init_inventory_db,

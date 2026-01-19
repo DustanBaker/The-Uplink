@@ -38,29 +38,30 @@ class LoginWindow(ctk.CTk):
         title_label = ctk.CTkLabel(
             main_frame,
             text="The-Uplink",
-            font=ctk.CTkFont(size=24, weight="bold")
+            font=ctk.CTkFont(size=28, weight="bold")
         )
         title_label.pack(pady=(0, 30))
 
         # Username
-        username_label = ctk.CTkLabel(main_frame, text="Username")
+        username_label = ctk.CTkLabel(main_frame, text="Username", font=ctk.CTkFont(size=14))
         username_label.pack(anchor="w")
 
-        self.username_entry = ctk.CTkEntry(main_frame, width=320)
+        self.username_entry = ctk.CTkEntry(main_frame, width=320, font=ctk.CTkFont(size=14))
         self.username_entry.pack(pady=(5, 15))
 
         # Password
-        password_label = ctk.CTkLabel(main_frame, text="Password")
+        password_label = ctk.CTkLabel(main_frame, text="Password", font=ctk.CTkFont(size=14))
         password_label.pack(anchor="w")
 
-        self.password_entry = ctk.CTkEntry(main_frame, width=320, show="*")
+        self.password_entry = ctk.CTkEntry(main_frame, width=320, show="*", font=ctk.CTkFont(size=14))
         self.password_entry.pack(pady=(5, 20))
 
         # Error message label (hidden by default)
         self.error_label = ctk.CTkLabel(
             main_frame,
             text="",
-            text_color="red"
+            text_color="red",
+            font=ctk.CTkFont(size=14)
         )
         self.error_label.pack(pady=(0, 10))
 
@@ -69,6 +70,7 @@ class LoginWindow(ctk.CTk):
             main_frame,
             text="Login",
             width=320,
+            font=ctk.CTkFont(size=14),
             command=self._handle_login
         )
         login_button.pack()

@@ -52,9 +52,11 @@ def with_retry(func):
 
 @with_retry
 def init_db():
-    """Initialize the database and create the users table if it doesn't exist."""
+    """Initialize the database and create tables if they don't exist."""
     conn = get_connection()
     cursor = conn.cursor()
+
+    # Users table
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,6 +65,22 @@ def init_db():
             created_at TEXT NOT NULL
         )
     """)
+
+    # Approved SKUs table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS approved_skus (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            sku TEXT UNIQUE NOT NULL,
+            description TEXT,
+            created_at TEXT NOT NULL
+        )
+    """)
+
+    # Create index for fast SKU lookups and autocomplete
+    cursor.execute("""
+        CREATE INDEX IF NOT EXISTS idx_sku ON approved_skus(sku)
+    """)
+
     conn.commit()
     conn.close()
 
@@ -167,3 +185,151 @@ def delete_user(username: str) -> bool:
     affected = cursor.rowcount
     conn.close()
     return affected > 0
+
+
+# ==================== SKU Functions ====================
+
+@with_retry
+def add_sku(sku: str, description: str = "") -> bool:
+    """Add an approved SKU to the database.
+
+    Returns True if successful, False if SKU already exists.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    try:
+        cursor.execute(
+            "INSERT INTO approved_skus (sku, description, created_at) VALUES (?, ?, ?)",
+            (sku.strip().upper(), description.strip(), datetime.now().isoformat())
+        )
+        conn.commit()
+        return True
+    except sqlite3.IntegrityError:
+        return False
+    finally:
+        conn.close()
+
+
+@with_retry
+def add_skus_bulk(skus: list[tuple[str, str]]) -> tuple[int, int]:
+    """Add multiple SKUs to the database.
+
+    Args:
+        skus: List of (sku, description) tuples
+
+    Returns:
+        Tuple of (successful_count, failed_count)
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    success = 0
+    failed = 0
+    timestamp = datetime.now().isoformat()
+
+    for sku, description in skus:
+        try:
+            cursor.execute(
+                "INSERT INTO approved_skus (sku, description, created_at) VALUES (?, ?, ?)",
+                (sku.strip().upper(), description.strip() if description else "", timestamp)
+            )
+            success += 1
+        except sqlite3.IntegrityError:
+            failed += 1
+
+    conn.commit()
+    conn.close()
+    return success, failed
+
+
+@with_retry
+def delete_sku(sku: str) -> bool:
+    """Delete an approved SKU from the database.
+
+    Returns True if successful, False if SKU not found.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM approved_skus WHERE sku = ?", (sku.upper(),))
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    return affected > 0
+
+
+@with_retry
+def get_all_skus() -> list[dict]:
+    """Get all approved SKUs from the database."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT id, sku, description, created_at FROM approved_skus ORDER BY sku")
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [
+        {
+            "id": row[0],
+            "sku": row[1],
+            "description": row[2],
+            "created_at": row[3]
+        }
+        for row in rows
+    ]
+
+
+@with_retry
+def search_skus(prefix: str, limit: int = 10) -> list[dict]:
+    """Search for SKUs matching a prefix (for autocomplete).
+
+    Returns up to `limit` matching SKUs.
+    """
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, sku, description FROM approved_skus WHERE sku LIKE ? ORDER BY sku LIMIT ?",
+        (prefix.upper() + "%", limit)
+    )
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [
+        {
+            "id": row[0],
+            "sku": row[1],
+            "description": row[2]
+        }
+        for row in rows
+    ]
+
+
+@with_retry
+def is_valid_sku(sku: str) -> bool:
+    """Check if a SKU is in the approved list."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT 1 FROM approved_skus WHERE sku = ?", (sku.strip().upper(),))
+    result = cursor.fetchone()
+    conn.close()
+    return result is not None
+
+
+@with_retry
+def get_sku_count() -> int:
+    """Get the total number of approved SKUs."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM approved_skus")
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
+
+
+@with_retry
+def clear_all_skus() -> int:
+    """Delete all approved SKUs. Returns the number deleted."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("DELETE FROM approved_skus")
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    return affected
