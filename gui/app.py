@@ -145,7 +145,7 @@ class MainApplication(ctk.CTk):
         repair_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
         repair_frame.pack(side="left", padx=(0, 15))
         ctk.CTkLabel(repair_frame, text="Repair State", font=ctk.CTkFont(size=14)).pack(anchor="w")
-        self.repair_options = ["To be repaired", "To be refurbished", "Storage only"]
+        self.repair_options = ["Temporary Storage","To be repaired", "To be refurbished","To be Scrapped","Storage only","Good Spare Parts","Refurbished","Repaired"]
         self.repair_dropdown = ctk.CTkOptionMenu(repair_frame, width=170, values=self.repair_options, font=ctk.CTkFont(size=14))
         self.repair_dropdown.set(self.repair_options[0])
         self.repair_dropdown.pack()
@@ -298,7 +298,7 @@ class MainApplication(ctk.CTk):
 
         # Repair State
         ctk.CTkLabel(frame, text="Repair State", font=ctk.CTkFont(size=14)).pack(anchor="w")
-        repair_options = ["To be repaired", "To be refurbished", "Storage only"]
+        repair_options = ["Temporary Storage","To be repaired", "To be refurbished","To be Scrapped","Storage only","Good Spare Parts","Refurbished","Repaired"]
         repair_dropdown = ctk.CTkOptionMenu(frame, width=340, values=repair_options, font=ctk.CTkFont(size=14))
         repair_dropdown.set(item['repair_state'])
         repair_dropdown.pack(pady=(2, 10))
@@ -315,6 +315,11 @@ class MainApplication(ctk.CTk):
 
             if not sku or not serial or not lpn:
                 status_label.configure(text="All fields are required")
+                return
+
+            # Validate LPN: must be exactly 11 digits
+            if not lpn.isdigit() or len(lpn) != 11:
+                status_label.configure(text="LPN must be exactly 11 digits (numbers only)")
                 return
 
             if update_inventory_item(item['id'], sku, serial, lpn, repair_state):
@@ -503,6 +508,11 @@ class MainApplication(ctk.CTk):
 
         if not lpn:
             self._show_user_status("LPN is required", error=True)
+            return
+
+        # Validate LPN: must be exactly 11 digits
+        if not lpn.isdigit() or len(lpn) != 11:
+            self._show_user_status("LPN must be exactly 11 digits (numbers only)", error=True)
             return
 
         # Save to inventory database
