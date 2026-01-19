@@ -66,18 +66,24 @@ def init_inventory_db():
             item_sku TEXT NOT NULL,
             serial_number TEXT NOT NULL,
             lpn TEXT NOT NULL,
+            location TEXT DEFAULT '',
             repair_state TEXT NOT NULL,
             entered_by TEXT NOT NULL,
             created_at TEXT NOT NULL
         )
     """)
+    # Add location column if it doesn't exist (for existing databases)
+    try:
+        cursor.execute("ALTER TABLE inventory ADD COLUMN location TEXT DEFAULT ''")
+    except:
+        pass  # Column already exists
     conn.commit()
     conn.close()
 
 
 @with_retry
 def add_inventory_item(item_sku: str, serial_number: str, lpn: str,
-                       repair_state: str, entered_by: str) -> int:
+                       location: str, repair_state: str, entered_by: str) -> int:
     """Add a new inventory item to the database.
 
     Returns the ID of the new item.
@@ -86,9 +92,9 @@ def add_inventory_item(item_sku: str, serial_number: str, lpn: str,
     cursor = conn.cursor()
     cursor.execute(
         """INSERT INTO inventory
-           (item_sku, serial_number, lpn, repair_state, entered_by, created_at)
-           VALUES (?, ?, ?, ?, ?, ?)""",
-        (item_sku, serial_number, lpn, repair_state, entered_by, datetime.now().isoformat())
+           (item_sku, serial_number, lpn, location, repair_state, entered_by, created_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?)""",
+        (item_sku, serial_number, lpn, location, repair_state, entered_by, datetime.now().isoformat())
     )
     conn.commit()
     item_id = cursor.lastrowid
@@ -102,7 +108,7 @@ def get_all_inventory() -> list[dict]:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, item_sku, serial_number, lpn, repair_state, entered_by, created_at
+        SELECT id, item_sku, serial_number, lpn, location, repair_state, entered_by, created_at
         FROM inventory
         ORDER BY created_at DESC
     """)
@@ -115,9 +121,10 @@ def get_all_inventory() -> list[dict]:
             "item_sku": row[1],
             "serial_number": row[2],
             "lpn": row[3],
-            "repair_state": row[4],
-            "entered_by": row[5],
-            "created_at": row[6]
+            "location": row[4] or '',
+            "repair_state": row[5],
+            "entered_by": row[6],
+            "created_at": row[7]
         }
         for row in rows
     ]
@@ -129,7 +136,7 @@ def get_inventory_by_user(username: str) -> list[dict]:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, item_sku, serial_number, lpn, repair_state, entered_by, created_at
+        SELECT id, item_sku, serial_number, lpn, location, repair_state, entered_by, created_at
         FROM inventory
         WHERE entered_by = ?
         ORDER BY created_at DESC
@@ -143,9 +150,10 @@ def get_inventory_by_user(username: str) -> list[dict]:
             "item_sku": row[1],
             "serial_number": row[2],
             "lpn": row[3],
-            "repair_state": row[4],
-            "entered_by": row[5],
-            "created_at": row[6]
+            "location": row[4] or '',
+            "repair_state": row[5],
+            "entered_by": row[6],
+            "created_at": row[7]
         }
         for row in rows
     ]
@@ -153,7 +161,7 @@ def get_inventory_by_user(username: str) -> list[dict]:
 
 @with_retry
 def update_inventory_item(item_id: int, item_sku: str, serial_number: str,
-                          lpn: str, repair_state: str) -> bool:
+                          lpn: str, location: str, repair_state: str) -> bool:
     """Update an existing inventory item.
 
     Returns True if successful, False if item not found.
@@ -162,9 +170,9 @@ def update_inventory_item(item_id: int, item_sku: str, serial_number: str,
     cursor = conn.cursor()
     cursor.execute(
         """UPDATE inventory
-           SET item_sku = ?, serial_number = ?, lpn = ?, repair_state = ?
+           SET item_sku = ?, serial_number = ?, lpn = ?, location = ?, repair_state = ?
            WHERE id = ?""",
-        (item_sku, serial_number, lpn, repair_state, item_id)
+        (item_sku, serial_number, lpn, location, repair_state, item_id)
     )
     conn.commit()
     affected = cursor.rowcount
@@ -185,3 +193,167 @@ def delete_inventory_item(item_id: int) -> bool:
     affected = cursor.rowcount
     conn.close()
     return affected > 0
+
+
+def get_imported_inventory_db_path() -> Path:
+    """Get the imported inventory database path."""
+    users_db = get_db_path()
+    return users_db.parent / "imported_inventory.db"
+
+
+def get_imported_connection():
+    """Get a connection to the imported inventory database."""
+    db_path = get_imported_inventory_db_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path, timeout=DB_TIMEOUT)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
+
+
+@with_retry
+def init_imported_inventory_db():
+    """Initialize the imported inventory database."""
+    conn = get_imported_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS imported_inventory (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            item_sku TEXT NOT NULL,
+            serial_number TEXT NOT NULL,
+            lpn TEXT NOT NULL,
+            location TEXT DEFAULT '',
+            repair_state TEXT NOT NULL,
+            entered_by TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            imported_at TEXT NOT NULL
+        )
+    """)
+    # Add location column if it doesn't exist (for existing databases)
+    try:
+        cursor.execute("ALTER TABLE imported_inventory ADD COLUMN location TEXT DEFAULT ''")
+    except:
+        pass  # Column already exists
+    conn.commit()
+    conn.close()
+
+
+@with_retry
+def move_inventory_to_imported() -> list[dict]:
+    """Move all items from active inventory to imported inventory.
+
+    Returns the list of moved items for CSV export.
+    """
+    # Initialize imported db if needed
+    init_imported_inventory_db()
+
+    # Get all active inventory items
+    items = get_all_inventory()
+
+    if not items:
+        return []
+
+    # Insert into imported inventory
+    imported_conn = get_imported_connection()
+    imported_cursor = imported_conn.cursor()
+    imported_at = datetime.now().isoformat()
+
+    for item in items:
+        imported_cursor.execute(
+            """INSERT INTO imported_inventory
+               (item_sku, serial_number, lpn, location, repair_state, entered_by, created_at, imported_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (item['item_sku'], item['serial_number'], item['lpn'], item.get('location', ''),
+             item['repair_state'], item['entered_by'], item['created_at'], imported_at)
+        )
+
+    imported_conn.commit()
+    imported_conn.close()
+
+    # Clear active inventory
+    active_conn = get_connection()
+    active_cursor = active_conn.cursor()
+    active_cursor.execute("DELETE FROM inventory")
+    active_conn.commit()
+    active_conn.close()
+
+    return items
+
+
+@with_retry
+def get_all_imported_inventory() -> list[dict]:
+    """Get all items from the imported inventory database."""
+    init_imported_inventory_db()
+
+    conn = get_imported_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT id, item_sku, serial_number, lpn, location, repair_state, entered_by, created_at, imported_at
+        FROM imported_inventory
+        ORDER BY imported_at DESC, created_at DESC
+    """)
+    rows = cursor.fetchall()
+    conn.close()
+
+    return [
+        {
+            "id": row[0],
+            "item_sku": row[1],
+            "serial_number": row[2],
+            "lpn": row[3],
+            "location": row[4] or '',
+            "repair_state": row[5],
+            "entered_by": row[6],
+            "created_at": row[7],
+            "imported_at": row[8]
+        }
+        for row in rows
+    ]
+
+
+def export_inventory_to_csv(items: list[dict], filepath: str) -> bool:
+    """Export inventory items to CSV with EcoFlow format.
+
+    Returns True if successful.
+    """
+    import csv
+
+    try:
+        with open(filepath, 'w', newline='', encoding='utf-8') as f:
+            writer = csv.writer(f)
+
+            # Row 1: Column numbers
+            writer.writerow(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18'])
+
+            # Row 2: Column headers
+            writer.writerow(['SN', 'LPN', 'Location', 'Client', 'PO #', 'Order #', 'Item', 'Rec Date', 'Qty', 'Qty Free', 'Shippable', 'Repair State', 'Firmware', 'Program', 'Warranty', 'Consigned', 'PartType', 'Grade'])
+
+            # Data rows
+            for item in items:
+                # Format the date
+                rec_date = item['created_at'].split('T')[0] if 'T' in item['created_at'] else item['created_at'][:10]
+
+                writer.writerow([
+                    item['serial_number'],      # SN
+                    item['lpn'],                # LPN
+                    item.get('location', ''),   # Location
+                    '',                         # Client
+                    '',                         # PO #
+                    '',                         # Order #
+                    item['item_sku'],           # Item
+                    rec_date,                   # Rec Date
+                    '1',                        # Qty
+                    '1',                        # Qty Free
+                    '',                         # Shippable
+                    item['repair_state'],       # Repair State
+                    '',                         # Firmware
+                    '',                         # Program
+                    '',                         # Warranty
+                    '',                         # Consigned
+                    '',                         # PartType
+                    ''                          # Grade
+                ])
+
+        return True
+    except Exception:
+        return False

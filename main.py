@@ -27,6 +27,7 @@ def run_app():
     """Run the application."""
 
     def on_login_success(user: dict):
+    
         """Callback when login is successful."""
         app = MainApplication(user, on_logout=run_app)
         app.mainloop()

@@ -3,10 +3,14 @@ from tkinter import filedialog
 from PIL import Image, ImageTk
 import os
 import csv
+from datetime import date
+import subprocess
+import threading
 from database import (
     create_user, get_all_users, update_user_password, delete_user,
     add_inventory_item, get_all_inventory, update_inventory_item, delete_inventory_item,
-    add_sku, add_skus_bulk, delete_sku, get_all_skus, search_skus, is_valid_sku, get_sku_count, clear_all_skus
+    add_sku, add_skus_bulk, delete_sku, get_all_skus, search_skus, is_valid_sku, get_sku_count, clear_all_skus,
+    move_inventory_to_imported, export_inventory_to_csv, get_all_imported_inventory
 )
 from utils import hash_password
 
@@ -26,6 +30,7 @@ class MainApplication(ctk.CTk):
 
         self.user = user
         self.on_logout = on_logout
+        self._refresh_poll_id = None  # Track polling timer
 
         self.title("The-Uplink")
         self.geometry("1000x650")
@@ -48,6 +53,39 @@ class MainApplication(ctk.CTk):
                     pass  # Icon setting failed, continue without icon
 
         self._create_widgets()
+        self._play_login_sound()
+
+    def _play_sound(self, filename, volume=150):
+        """Play a sound file in background thread."""
+        def play():
+            try:
+                sound_path = os.path.join(os.path.dirname(__file__), filename)
+                if os.path.exists(sound_path):
+                    # Try different audio players with volume boost
+                    for player in [['mpv', '--no-video', f'--volume={volume}'], ['ffplay', '-nodisp', '-autoexit', '-volume', str(volume)], ['paplay']]:
+                        try:
+                            subprocess.run(player + [sound_path],
+                                         stdout=subprocess.DEVNULL,
+                                         stderr=subprocess.DEVNULL)
+                            break
+                        except FileNotFoundError:
+                            continue
+            except Exception:
+                pass
+
+        threading.Thread(target=play, daemon=True).start()
+
+    def _play_login_sound(self):
+        """Play the login sound once."""
+        self._play_sound("arc_raiders.mp3")
+
+    def _play_success_sound(self):
+        """Play the success/loot sound."""
+        self._play_sound("arc-raiders-loot.mp3")
+
+    def _play_error_sound(self):
+        """Play the error sound."""
+        self._play_sound("arc-raiders-elevator.mp3")
 
     def _create_widgets(self):
         """Create and layout all widgets."""
@@ -141,6 +179,13 @@ class MainApplication(ctk.CTk):
         self.lpn_entry = ctk.CTkEntry(lpn_frame, width=150, font=ctk.CTkFont(size=14))
         self.lpn_entry.pack()
 
+        # Location
+        location_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
+        location_frame.pack(side="left", padx=(0, 15))
+        ctk.CTkLabel(location_frame, text="Location", font=ctk.CTkFont(size=14)).pack(anchor="w")
+        self.location_entry = ctk.CTkEntry(location_frame, width=120, font=ctk.CTkFont(size=14))
+        self.location_entry.pack()
+
         # Repair State
         repair_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
         repair_frame.pack(side="left", padx=(0, 15))
@@ -171,12 +216,27 @@ class MainApplication(ctk.CTk):
         list_frame = ctk.CTkFrame(parent)
         list_frame.grid(row=1, column=0, padx=10, pady=(0, 10), sticky="nsew")
 
+        # Header with title and export button
+        list_header = ctk.CTkFrame(list_frame, fg_color="transparent")
+        list_header.pack(fill="x", padx=20, pady=(15, 10))
+
         list_title = ctk.CTkLabel(
-            list_frame,
+            list_header,
             text="Active Inventory",
             font=ctk.CTkFont(size=20, weight="bold")
         )
-        list_title.pack(pady=(15, 10), padx=20, anchor="w")
+        list_title.pack(side="left")
+
+        export_button = ctk.CTkButton(
+            list_header,
+            text="Export & Archive",
+            width=140,
+            font=ctk.CTkFont(size=14),
+            fg_color="#28a745",
+            hover_color="#218838",
+            command=self._handle_export_inventory
+        )
+        export_button.pack(side="right")
 
         # Scrollable frame for inventory list
         self.inventory_list_frame = ctk.CTkScrollableFrame(list_frame)
@@ -191,6 +251,22 @@ class MainApplication(ctk.CTk):
         self.inventory_list_frame.grid_columnconfigure(5, weight=1)
 
         self._refresh_inventory_list()
+        self._start_inventory_polling()
+
+    def _start_inventory_polling(self):
+        """Start polling to refresh inventory every 10 seconds."""
+        self._refresh_poll_id = self.after(10000, self._poll_inventory)
+
+    def _poll_inventory(self):
+        """Poll and refresh inventory, then schedule next poll."""
+        self._refresh_inventory_list()
+        self._refresh_poll_id = self.after(10000, self._poll_inventory)
+
+    def _stop_inventory_polling(self):
+        """Stop the inventory polling."""
+        if self._refresh_poll_id:
+            self.after_cancel(self._refresh_poll_id)
+            self._refresh_poll_id = None
 
     def _refresh_inventory_list(self):
         """Refresh the inventory list display."""
@@ -199,7 +275,7 @@ class MainApplication(ctk.CTk):
             widget.destroy()
 
         # Header row
-        headers = ["SKU", "Serial Number", "LPN", "Repair State", "Entered By", "Date", "", ""]
+        headers = ["SKU", "Serial Number", "LPN", "Location", "Repair State", "Entered By", "Date", "", ""]
         for col, header in enumerate(headers):
             label = ctk.CTkLabel(
                 self.inventory_list_frame,
@@ -217,14 +293,16 @@ class MainApplication(ctk.CTk):
                 row=row, column=1, padx=5, pady=3, sticky="w")
             ctk.CTkLabel(self.inventory_list_frame, text=item['lpn'], font=ctk.CTkFont(size=14)).grid(
                 row=row, column=2, padx=5, pady=3, sticky="w")
-            ctk.CTkLabel(self.inventory_list_frame, text=item['repair_state'], font=ctk.CTkFont(size=14)).grid(
+            ctk.CTkLabel(self.inventory_list_frame, text=item.get('location', ''), font=ctk.CTkFont(size=14)).grid(
                 row=row, column=3, padx=5, pady=3, sticky="w")
-            ctk.CTkLabel(self.inventory_list_frame, text=item['entered_by'], font=ctk.CTkFont(size=14)).grid(
+            ctk.CTkLabel(self.inventory_list_frame, text=item['repair_state'], font=ctk.CTkFont(size=14)).grid(
                 row=row, column=4, padx=5, pady=3, sticky="w")
+            ctk.CTkLabel(self.inventory_list_frame, text=item['entered_by'], font=ctk.CTkFont(size=14)).grid(
+                row=row, column=5, padx=5, pady=3, sticky="w")
             # Format date
             date_str = item['created_at'].split('T')[0] if 'T' in item['created_at'] else item['created_at'][:10]
             ctk.CTkLabel(self.inventory_list_frame, text=date_str, font=ctk.CTkFont(size=14)).grid(
-                row=row, column=5, padx=5, pady=3, sticky="w")
+                row=row, column=6, padx=5, pady=3, sticky="w")
 
             # Edit button
             edit_btn = ctk.CTkButton(
@@ -235,7 +313,7 @@ class MainApplication(ctk.CTk):
                 font=ctk.CTkFont(size=13),
                 command=lambda i=item: self._show_edit_inventory_dialog(i)
             )
-            edit_btn.grid(row=row, column=6, padx=2, pady=3)
+            edit_btn.grid(row=row, column=7, padx=2, pady=3)
 
             # Delete button
             delete_btn = ctk.CTkButton(
@@ -248,7 +326,7 @@ class MainApplication(ctk.CTk):
                 hover_color="#c82333",
                 command=lambda i=item: self._delete_inventory_item(i)
             )
-            delete_btn.grid(row=row, column=7, padx=2, pady=3)
+            delete_btn.grid(row=row, column=8, padx=2, pady=3)
 
     def _show_edit_inventory_dialog(self, item: dict):
         """Show dialog to edit an inventory item."""
@@ -315,11 +393,13 @@ class MainApplication(ctk.CTk):
 
             if not sku or not serial or not lpn:
                 status_label.configure(text="All fields are required")
+                self._play_error_sound()
                 return
 
             # Validate LPN: must be exactly 11 digits
             if not lpn.isdigit() or len(lpn) != 11:
                 status_label.configure(text="LPN must be exactly 11 digits (numbers only)")
+                self._play_error_sound()
                 return
 
             if update_inventory_item(item['id'], sku, serial, lpn, repair_state):
@@ -328,6 +408,7 @@ class MainApplication(ctk.CTk):
                 self._show_user_status("Item updated successfully", error=False)
             else:
                 status_label.configure(text="Failed to update item")
+                self._play_error_sound()
 
         # Buttons
         button_frame = ctk.CTkFrame(frame, fg_color="transparent")
@@ -490,6 +571,7 @@ class MainApplication(ctk.CTk):
         sku = self.sku_entry.get().strip()
         serial = self.serial_entry.get().strip()
         lpn = self.lpn_entry.get().strip()
+        location = self.location_entry.get().strip()
         repair_state = self.repair_dropdown.get()
 
         # Basic validation
@@ -521,10 +603,12 @@ class MainApplication(ctk.CTk):
                 item_sku=sku,
                 serial_number=serial,
                 lpn=lpn,
+                location=location,
                 repair_state=repair_state,
                 entered_by=self.user['username']
             )
             self._show_user_status("Entry submitted successfully", error=False)
+            self._play_success_sound()
         except Exception as e:
             self._show_user_status(f"Failed to save: {str(e)}", error=True)
             return
@@ -533,6 +617,7 @@ class MainApplication(ctk.CTk):
         self.sku_entry.delete(0, 'end')
         self.serial_entry.delete(0, 'end')
         self.lpn_entry.delete(0, 'end')
+        self.location_entry.delete(0, 'end')
         self.repair_dropdown.set(self.repair_options[0])
 
         # Refresh inventory list
@@ -545,9 +630,46 @@ class MainApplication(ctk.CTk):
         """Display a status message for user panel."""
         color = "red" if error else "green"
         self.user_status_label.configure(text=message, text_color=color)
+        if error:
+            self._play_error_sound()
+
+    def _handle_export_inventory(self):
+        """Handle export and archive of inventory."""
+        items = get_all_inventory()
+
+        if not items:
+            self._show_user_status("No inventory items to export", error=True)
+            return
+
+        # Generate filename with today's date
+        today = date.today().strftime("%Y-%m-%d")
+        default_filename = f"EcoFlow stock import({today}).csv"
+        default_dir = r"T:\3PL Files\Stock Import"
+
+        # Ask user where to save the file
+        filepath = filedialog.asksaveasfilename(
+            title="Save CSV Export",
+            defaultextension=".csv",
+            initialdir=default_dir if os.path.exists(default_dir) else None,
+            initialfile=default_filename,
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+
+        if not filepath:
+            return  # User cancelled
+
+        # Move items to imported inventory and export CSV
+        moved_items = move_inventory_to_imported()
+
+        if export_inventory_to_csv(moved_items, filepath):
+            self._show_user_status(f"Exported {len(moved_items)} items and archived", error=False)
+            self._refresh_inventory_list()
+            self._play_success_sound()
+        else:
+            self._show_user_status("Failed to export CSV", error=True)
 
     def _create_admin_panel(self, parent):
-        """Create the admin panel with tabbed interface for Users and SKUs."""
+        """Create the admin panel with tabbed interface for Users, SKUs, and Inventory."""
         # Create tabview
         tabview = ctk.CTkTabview(parent)
         tabview.pack(expand=True, fill="both", padx=10, pady=10)
@@ -555,10 +677,12 @@ class MainApplication(ctk.CTk):
         # Add tabs
         tabview.add("Users")
         tabview.add("Approved SKUs")
+        tabview.add("Inventory")
 
         # Create content for each tab
         self._create_users_tab(tabview.tab("Users"))
         self._create_skus_tab(tabview.tab("Approved SKUs"))
+        self._create_inventory_tab(tabview.tab("Inventory"))
 
     def _create_users_tab(self, parent):
         """Create the users management tab."""
@@ -757,6 +881,215 @@ class MainApplication(ctk.CTk):
 
         self._refresh_sku_list()
 
+    def _create_inventory_tab(self, parent):
+        """Create the inventory viewing tab for admin."""
+        # Create sub-tabview for Active and Archived
+        inventory_tabview = ctk.CTkTabview(parent)
+        inventory_tabview.pack(expand=True, fill="both", padx=5, pady=5)
+
+        inventory_tabview.add("Active Inventory")
+        inventory_tabview.add("Archived Inventory")
+
+        # Active inventory section
+        self._create_active_inventory_view(inventory_tabview.tab("Active Inventory"))
+
+        # Archived inventory section
+        self._create_archived_inventory_view(inventory_tabview.tab("Archived Inventory"))
+
+    def _create_active_inventory_view(self, parent):
+        """Create the active inventory view."""
+        # Header with refresh button
+        header_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        header_frame.pack(fill="x", padx=10, pady=(10, 5))
+
+        title = ctk.CTkLabel(
+            header_frame,
+            text="Active Inventory Items",
+            font=ctk.CTkFont(size=18, weight="bold")
+        )
+        title.pack(side="left")
+
+        refresh_btn = ctk.CTkButton(
+            header_frame,
+            text="Refresh",
+            width=100,
+            font=ctk.CTkFont(size=14),
+            command=self._refresh_admin_active_inventory
+        )
+        refresh_btn.pack(side="right", padx=(5, 0))
+
+        export_btn = ctk.CTkButton(
+            header_frame,
+            text="Export & Archive",
+            width=140,
+            font=ctk.CTkFont(size=14),
+            fg_color="#28a745",
+            hover_color="#218838",
+            command=self._handle_admin_export_inventory
+        )
+        export_btn.pack(side="right")
+
+        # Scrollable frame for inventory list
+        self.admin_active_inventory_frame = ctk.CTkScrollableFrame(parent)
+        self.admin_active_inventory_frame.pack(expand=True, fill="both", padx=10, pady=(0, 10))
+
+        # Configure columns
+        for i in range(6):
+            self.admin_active_inventory_frame.grid_columnconfigure(i, weight=1)
+
+        self._refresh_admin_active_inventory()
+
+    def _create_archived_inventory_view(self, parent):
+        """Create the archived inventory view."""
+        # Header with refresh button
+        header_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        header_frame.pack(fill="x", padx=10, pady=(10, 5))
+
+        title = ctk.CTkLabel(
+            header_frame,
+            text="Archived Inventory Items",
+            font=ctk.CTkFont(size=18, weight="bold")
+        )
+        title.pack(side="left")
+
+        refresh_btn = ctk.CTkButton(
+            header_frame,
+            text="Refresh",
+            width=100,
+            font=ctk.CTkFont(size=14),
+            command=self._refresh_admin_archived_inventory
+        )
+        refresh_btn.pack(side="right")
+
+        # Scrollable frame for inventory list
+        self.admin_archived_inventory_frame = ctk.CTkScrollableFrame(parent)
+        self.admin_archived_inventory_frame.pack(expand=True, fill="both", padx=10, pady=(0, 10))
+
+        # Configure columns
+        for i in range(7):
+            self.admin_archived_inventory_frame.grid_columnconfigure(i, weight=1)
+
+        self._refresh_admin_archived_inventory()
+
+    def _refresh_admin_active_inventory(self):
+        """Refresh the admin active inventory list."""
+        for widget in self.admin_active_inventory_frame.winfo_children():
+            widget.destroy()
+
+        # Header row
+        headers = ["SKU", "Serial Number", "LPN", "Repair State", "Entered By", "Date"]
+        for col, header in enumerate(headers):
+            label = ctk.CTkLabel(
+                self.admin_active_inventory_frame,
+                text=header,
+                font=ctk.CTkFont(size=14, weight="bold")
+            )
+            label.grid(row=0, column=col, padx=5, pady=(0, 10), sticky="w")
+
+        # Inventory rows
+        items = get_all_inventory()
+        for row, item in enumerate(items, start=1):
+            ctk.CTkLabel(self.admin_active_inventory_frame, text=item['item_sku'], font=ctk.CTkFont(size=13)).grid(
+                row=row, column=0, padx=5, pady=3, sticky="w")
+            ctk.CTkLabel(self.admin_active_inventory_frame, text=item['serial_number'], font=ctk.CTkFont(size=13)).grid(
+                row=row, column=1, padx=5, pady=3, sticky="w")
+            ctk.CTkLabel(self.admin_active_inventory_frame, text=item['lpn'], font=ctk.CTkFont(size=13)).grid(
+                row=row, column=2, padx=5, pady=3, sticky="w")
+            ctk.CTkLabel(self.admin_active_inventory_frame, text=item['repair_state'], font=ctk.CTkFont(size=13)).grid(
+                row=row, column=3, padx=5, pady=3, sticky="w")
+            ctk.CTkLabel(self.admin_active_inventory_frame, text=item['entered_by'], font=ctk.CTkFont(size=13)).grid(
+                row=row, column=4, padx=5, pady=3, sticky="w")
+            date_str = item['created_at'].split('T')[0] if 'T' in item['created_at'] else item['created_at'][:10]
+            ctk.CTkLabel(self.admin_active_inventory_frame, text=date_str, font=ctk.CTkFont(size=13)).grid(
+                row=row, column=5, padx=5, pady=3, sticky="w")
+
+    def _refresh_admin_archived_inventory(self):
+        """Refresh the admin archived inventory list."""
+        for widget in self.admin_archived_inventory_frame.winfo_children():
+            widget.destroy()
+
+        # Header row
+        headers = ["SKU", "Serial Number", "LPN", "Repair State", "Entered By", "Created", "Archived"]
+        for col, header in enumerate(headers):
+            label = ctk.CTkLabel(
+                self.admin_archived_inventory_frame,
+                text=header,
+                font=ctk.CTkFont(size=14, weight="bold")
+            )
+            label.grid(row=0, column=col, padx=5, pady=(0, 10), sticky="w")
+
+        # Inventory rows
+        items = get_all_imported_inventory()
+        for row, item in enumerate(items, start=1):
+            ctk.CTkLabel(self.admin_archived_inventory_frame, text=item['item_sku'], font=ctk.CTkFont(size=13)).grid(
+                row=row, column=0, padx=5, pady=3, sticky="w")
+            ctk.CTkLabel(self.admin_archived_inventory_frame, text=item['serial_number'], font=ctk.CTkFont(size=13)).grid(
+                row=row, column=1, padx=5, pady=3, sticky="w")
+            ctk.CTkLabel(self.admin_archived_inventory_frame, text=item['lpn'], font=ctk.CTkFont(size=13)).grid(
+                row=row, column=2, padx=5, pady=3, sticky="w")
+            ctk.CTkLabel(self.admin_archived_inventory_frame, text=item['repair_state'], font=ctk.CTkFont(size=13)).grid(
+                row=row, column=3, padx=5, pady=3, sticky="w")
+            ctk.CTkLabel(self.admin_archived_inventory_frame, text=item['entered_by'], font=ctk.CTkFont(size=13)).grid(
+                row=row, column=4, padx=5, pady=3, sticky="w")
+            created_str = item['created_at'].split('T')[0] if 'T' in item['created_at'] else item['created_at'][:10]
+            ctk.CTkLabel(self.admin_archived_inventory_frame, text=created_str, font=ctk.CTkFont(size=13)).grid(
+                row=row, column=5, padx=5, pady=3, sticky="w")
+            archived_str = item['imported_at'].split('T')[0] if 'T' in item['imported_at'] else item['imported_at'][:10]
+            ctk.CTkLabel(self.admin_archived_inventory_frame, text=archived_str, font=ctk.CTkFont(size=13)).grid(
+                row=row, column=6, padx=5, pady=3, sticky="w")
+
+    def _handle_admin_export_inventory(self):
+        """Handle export and archive of inventory from admin panel."""
+        items = get_all_inventory()
+
+        if not items:
+            # Show a simple dialog for admin since they don't have user_status_label
+            dialog = ctk.CTkToplevel(self)
+            dialog.title("Export")
+            dialog.geometry("300x100")
+            dialog.resizable(False, False)
+            dialog.transient(self)
+            ctk.CTkLabel(dialog, text="No inventory items to export", font=ctk.CTkFont(size=14)).pack(pady=20)
+            ctk.CTkButton(dialog, text="OK", width=80, command=dialog.destroy).pack()
+            dialog.wait_visibility()
+            dialog.grab_set()
+            return
+
+        # Generate filename with today's date
+        today = date.today().strftime("%Y-%m-%d")
+        default_filename = f"EcoFlow stock import({today}).csv"
+        default_dir = r"T:\3PL Files\Stock Import"
+
+        # Ask user where to save the file
+        filepath = filedialog.asksaveasfilename(
+            title="Save CSV Export",
+            defaultextension=".csv",
+            initialdir=default_dir if os.path.exists(default_dir) else None,
+            initialfile=default_filename,
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+
+        if not filepath:
+            return  # User cancelled
+
+        # Move items to imported inventory and export CSV
+        moved_items = move_inventory_to_imported()
+
+        if export_inventory_to_csv(moved_items, filepath):
+            self._refresh_admin_active_inventory()
+            self._refresh_admin_archived_inventory()
+            self._play_success_sound()
+            # Show success dialog
+            dialog = ctk.CTkToplevel(self)
+            dialog.title("Export Complete")
+            dialog.geometry("300x100")
+            dialog.resizable(False, False)
+            dialog.transient(self)
+            ctk.CTkLabel(dialog, text=f"Exported {len(moved_items)} items", font=ctk.CTkFont(size=14)).pack(pady=20)
+            ctk.CTkButton(dialog, text="OK", width=80, command=dialog.destroy).pack()
+            dialog.wait_visibility()
+            dialog.grab_set()
+
     def _refresh_sku_list(self, filter_text: str = ""):
         """Refresh the SKU list display."""
         for widget in self.sku_list_frame.winfo_children():
@@ -811,6 +1144,7 @@ class MainApplication(ctk.CTk):
 
         if not sku:
             self.sku_status_label.configure(text="SKU is required", text_color="red")
+            self._play_error_sound()
             return
 
         if add_sku(sku, description):
@@ -818,8 +1152,10 @@ class MainApplication(ctk.CTk):
             self.new_sku_entry.delete(0, 'end')
             self.new_sku_desc_entry.delete(0, 'end')
             self._refresh_sku_list()
+            self._play_success_sound()
         else:
             self.sku_status_label.configure(text="SKU already exists", text_color="red")
+            self._play_error_sound()
 
     def _handle_delete_sku(self, sku: str):
         """Handle deleting a SKU."""
@@ -865,6 +1201,7 @@ class MainApplication(ctk.CTk):
 
         except Exception as e:
             self.sku_status_label.configure(text=f"Error: {str(e)}", text_color="red")
+            self._play_error_sound()
 
     def _clear_all_skus(self):
         """Clear all SKUs with confirmation."""
@@ -1030,14 +1367,17 @@ class MainApplication(ctk.CTk):
 
             if not new_pw:
                 status_label.configure(text="Password is required")
+                self._play_error_sound()
                 return
 
             if len(new_pw) < 4:
                 status_label.configure(text="Password must be at least 4 characters")
+                self._play_error_sound()
                 return
 
             if new_pw != confirm:
                 status_label.configure(text="Passwords do not match")
+                self._play_error_sound()
                 return
 
             password_hash = hash_password(new_pw)
@@ -1046,6 +1386,7 @@ class MainApplication(ctk.CTk):
                 self._show_status(f"Password reset for '{username}'", error=False)
             else:
                 status_label.configure(text="Failed to reset password")
+                self._play_error_sound()
 
         # Buttons
         button_frame = ctk.CTkFrame(frame, fg_color="transparent")
@@ -1180,8 +1521,11 @@ class MainApplication(ctk.CTk):
         """Display a status message."""
         color = "red" if error else "green"
         self.status_label.configure(text=message, text_color=color)
+        if error:
+            self._play_error_sound()
 
     def _handle_logout(self):
         """Handle logout button click."""
+        self._stop_inventory_polling()
         self.destroy()
         self.on_logout()

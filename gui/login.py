@@ -15,7 +15,7 @@ class LoginWindow(ctk.CTk):
         self.logged_in_user = None
 
         self.title("The-Uplink - Login")
-        self.geometry("400x300")
+        self.geometry("400x400")
         self.resizable(False, False)
 
        # Set window icon
@@ -40,7 +40,7 @@ class LoginWindow(ctk.CTk):
         """Center the window on the screen."""
         self.update_idletasks()
         width = 400
-        height = 300
+        height = 600
         x = (self.winfo_screenwidth() // 2) - (width // 2)
         y = (self.winfo_screenheight() // 2) - (height // 2)
         self.geometry(f"{width}x{height}+{x}+{y}")
@@ -51,27 +51,39 @@ class LoginWindow(ctk.CTk):
         main_frame = ctk.CTkFrame(self, fg_color="transparent")
         main_frame.pack(expand=True, fill="both", padx=40, pady=40)
 
-        # Title
-        title_label = ctk.CTkLabel(
-            main_frame,
-            text="The-Uplink",
-            font=ctk.CTkFont(size=28, weight="bold")
-        )
-        title_label.pack(pady=(0, 30))
+        # Logo
+        logo_path = os.path.join(os.path.dirname(__file__), "The Uplink logo.png")
+        if os.path.exists(logo_path):
+            logo_image = Image.open(logo_path)
+            # Resize logo maintaining aspect ratio
+            logo_image = logo_image.resize((200, 200), Image.LANCZOS)
+            self._logo_photo = ctk.CTkImage(light_image=logo_image, dark_image=logo_image, size=(200, 200))
+            logo_label = ctk.CTkLabel(main_frame, image=self._logo_photo, text="")
+            logo_label.pack(pady=(0, 30))
+        else:
+            # Fallback to text if image not found
+            title_label = ctk.CTkLabel(
+                main_frame,
+                text="The-Uplink",
+                font=ctk.CTkFont(size=28, weight="bold")
+            )
+            title_label.pack(pady=(0, 30))
 
-        # Username
-        username_label = ctk.CTkLabel(main_frame, text="Username", font=ctk.CTkFont(size=14))
-        username_label.pack(anchor="w")
+        # Username row
+        username_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        username_frame.pack(fill="x", pady=(0, 15))
+        username_label = ctk.CTkLabel(username_frame, text="Username", font=ctk.CTkFont(size=14), width=80)
+        username_label.pack(side="left")
+        self.username_entry = ctk.CTkEntry(username_frame, width=280, font=ctk.CTkFont(size=14))
+        self.username_entry.pack(side="left", padx=(10, 0))
 
-        self.username_entry = ctk.CTkEntry(main_frame, width=320, font=ctk.CTkFont(size=14))
-        self.username_entry.pack(pady=(5, 15))
-
-        # Password
-        password_label = ctk.CTkLabel(main_frame, text="Password", font=ctk.CTkFont(size=14))
-        password_label.pack(anchor="w")
-
-        self.password_entry = ctk.CTkEntry(main_frame, width=320, show="*", font=ctk.CTkFont(size=14))
-        self.password_entry.pack(pady=(5, 20))
+        # Password row
+        password_frame = ctk.CTkFrame(main_frame, fg_color="transparent")
+        password_frame.pack(fill="x", pady=(0, 20))
+        password_label = ctk.CTkLabel(password_frame, text="Password", font=ctk.CTkFont(size=14), width=80)
+        password_label.pack(side="left")
+        self.password_entry = ctk.CTkEntry(password_frame, width=280, show="*", font=ctk.CTkFont(size=14))
+        self.password_entry.pack(side="left", padx=(10, 0))
 
         # Error message label (hidden by default)
         self.error_label = ctk.CTkLabel(
