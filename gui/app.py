@@ -30,13 +30,22 @@ class MainApplication(ctk.CTk):
         self.title("The-Uplink")
         self.geometry("1000x650")
         self.minsize(900, 550)
+       
 
         # Set window icon
         icon_path = os.path.join(os.path.dirname(__file__), "The_Uplink_App_Icon.ico")
         if os.path.exists(icon_path):
-            icon_image = Image.open(icon_path)
-            self._icon_photo = ImageTk.PhotoImage(icon_image)
-            self.iconphoto(True, self._icon_photo)
+            try:
+                # For .ico files on Windows, use wm_iconbitmap directly
+                self.iconbitmap(icon_path)
+            except Exception:
+                # Fallback for non-Windows or if iconbitmap fails
+                try:
+                    icon_image = Image.open(icon_path)
+                    self._icon_photo = ImageTk.PhotoImage(icon_image)
+                    self.iconphoto(True, self._icon_photo)
+                except Exception:
+                    pass  # Icon setting failed, continue without icon
 
         self._create_widgets()
 

@@ -18,12 +18,20 @@ class LoginWindow(ctk.CTk):
         self.geometry("400x300")
         self.resizable(False, False)
 
-        # Set window icon
+       # Set window icon
         icon_path = os.path.join(os.path.dirname(__file__), "The_Uplink_App_Icon.ico")
         if os.path.exists(icon_path):
-            icon_image = Image.open(icon_path)
-            self._icon_photo = ImageTk.PhotoImage(icon_image)
-            self.iconphoto(True, self._icon_photo)
+            try:
+                # For .ico files on Windows, use wm_iconbitmap directly
+                self.iconbitmap(icon_path)
+            except Exception:
+                # Fallback for non-Windows or if iconbitmap fails
+                try:
+                    icon_image = Image.open(icon_path)
+                    self._icon_photo = ImageTk.PhotoImage(icon_image)
+                    self.iconphoto(True, self._icon_photo)
+                except Exception:
+                    pass  # Icon setting failed, continue without icon
 
         self._center_window()
         self._create_widgets()
