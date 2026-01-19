@@ -1,15 +1,56 @@
 import sqlite3
-from pathlib import Path
+import time
 from datetime import datetime
+from functools import wraps
 
-DB_PATH = Path(__file__).parent / "users.db"
+import sys
+from pathlib import Path
+sys.path.insert(0, str(Path(__file__).parent.parent))
+from config import get_db_path, DB_TIMEOUT, DB_RETRY_ATTEMPTS, DB_RETRY_DELAY
 
 
 def get_connection():
-    """Get a connection to the SQLite database."""
-    return sqlite3.connect(DB_PATH)
+    """Get a connection to the SQLite database with WAL mode enabled."""
+    db_path = get_db_path()
+
+    # Ensure parent directory exists
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    conn = sqlite3.connect(db_path, timeout=DB_TIMEOUT)
+
+    # Enable WAL mode for better concurrency on network drives
+    conn.execute("PRAGMA journal_mode=WAL")
+    # Ensure writes are synced to disk
+    conn.execute("PRAGMA synchronous=NORMAL")
+
+    return conn
 
 
+def with_retry(func):
+    """Decorator to retry database operations on failure."""
+    @wraps(func)
+    def wrapper(*args, **kwargs):
+        last_error = None
+        for attempt in range(DB_RETRY_ATTEMPTS):
+            try:
+                return func(*args, **kwargs)
+            except sqlite3.OperationalError as e:
+                last_error = e
+                if attempt < DB_RETRY_ATTEMPTS - 1:
+                    time.sleep(DB_RETRY_DELAY)
+                    continue
+                raise
+            except sqlite3.DatabaseError as e:
+                last_error = e
+                if attempt < DB_RETRY_ATTEMPTS - 1:
+                    time.sleep(DB_RETRY_DELAY)
+                    continue
+                raise
+        raise last_error
+    return wrapper
+
+
+@with_retry
 def init_db():
     """Initialize the database and create the users table if it doesn't exist."""
     conn = get_connection()
@@ -26,6 +67,7 @@ def init_db():
     conn.close()
 
 
+@with_retry
 def create_user(username: str, password_hash: str) -> bool:
     """Create a new user in the database.
 
@@ -46,6 +88,7 @@ def create_user(username: str, password_hash: str) -> bool:
         conn.close()
 
 
+@with_retry
 def get_user_by_username(username: str) -> dict | None:
     """Get a user by username.
 
@@ -70,6 +113,7 @@ def get_user_by_username(username: str) -> dict | None:
     return None
 
 
+@with_retry
 def get_all_users() -> list[dict]:
     """Get all users from the database.
 
@@ -92,6 +136,7 @@ def get_all_users() -> list[dict]:
     ]
 
 
+@with_retry
 def update_user_password(username: str, new_password_hash: str) -> bool:
     """Update a user's password.
 
@@ -109,6 +154,7 @@ def update_user_password(username: str, new_password_hash: str) -> bool:
     return affected > 0
 
 
+@with_retry
 def delete_user(username: str) -> bool:
     """Delete a user from the database.
 

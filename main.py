@@ -2,7 +2,7 @@
 """The-Uplink - Main entry point."""
 
 import customtkinter as ctk
-from database import init_db, create_user, get_user_by_username
+from database import init_db, init_inventory_db, create_user, get_user_by_username
 from utils import hash_password
 from gui import LoginWindow, MainApplication
 
@@ -37,8 +37,9 @@ def run_app():
 
 def main():
     """Main entry point."""
-    # Initialize database
+    # Initialize databases
     init_db()
+    init_inventory_db()
 
     # Create default user if needed
     create_default_user()
