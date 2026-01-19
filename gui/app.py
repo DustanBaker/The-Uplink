@@ -1,5 +1,7 @@
 import customtkinter as ctk
 from tkinter import filedialog
+from PIL import Image, ImageTk
+import os
 import csv
 from database import (
     create_user, get_all_users, update_user_password, delete_user,
@@ -28,6 +30,13 @@ class MainApplication(ctk.CTk):
         self.title("The-Uplink")
         self.geometry("1000x650")
         self.minsize(900, 550)
+
+        # Set window icon
+        icon_path = os.path.join(os.path.dirname(__file__), "The_Uplink_App_Icon.ico")
+        if os.path.exists(icon_path):
+            icon_image = Image.open(icon_path)
+            self._icon_photo = ImageTk.PhotoImage(icon_image)
+            self.iconphoto(True, self._icon_photo)
 
         self._create_widgets()
 

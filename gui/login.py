@@ -1,4 +1,6 @@
 import customtkinter as ctk
+from PIL import Image, ImageTk
+import os
 from database import get_user_by_username
 from utils import verify_password
 
@@ -15,6 +17,13 @@ class LoginWindow(ctk.CTk):
         self.title("The-Uplink - Login")
         self.geometry("400x300")
         self.resizable(False, False)
+
+        # Set window icon
+        icon_path = os.path.join(os.path.dirname(__file__), "The_Uplink_App_Icon.ico")
+        if os.path.exists(icon_path):
+            icon_image = Image.open(icon_path)
+            self._icon_photo = ImageTk.PhotoImage(icon_image)
+            self.iconphoto(True, self._icon_photo)
 
         self._center_window()
         self._create_widgets()
