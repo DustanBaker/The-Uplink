@@ -13,7 +13,7 @@ from database import (
     add_sku, add_skus_bulk, delete_sku, get_all_skus, search_skus, is_valid_sku, get_sku_count, clear_all_skus,
     move_inventory_to_imported, export_inventory_to_csv, get_all_imported_inventory
 )
-from utils import hash_password
+from utils import hash_password, get_gui_resource
 
 
 class MainApplication(ctk.CTk):
@@ -39,19 +39,18 @@ class MainApplication(ctk.CTk):
        
 
         # Set window icon
-        icon_path = os.path.join(os.path.dirname(__file__), "The_Uplink_App_Icon.ico")
-        if os.path.exists(icon_path):
+        icon_path = get_gui_resource("The_Uplink_App_Icon.ico")
+        try:
+            # For .ico files on Windows, use wm_iconbitmap directly
+            self.iconbitmap(icon_path)
+        except Exception:
+            # Fallback for non-Windows or if iconbitmap fails
             try:
-                # For .ico files on Windows, use wm_iconbitmap directly
-                self.iconbitmap(icon_path)
+                icon_image = Image.open(icon_path)
+                self._icon_photo = ImageTk.PhotoImage(icon_image)
+                self.iconphoto(True, self._icon_photo)
             except Exception:
-                # Fallback for non-Windows or if iconbitmap fails
-                try:
-                    icon_image = Image.open(icon_path)
-                    self._icon_photo = ImageTk.PhotoImage(icon_image)
-                    self.iconphoto(True, self._icon_photo)
-                except Exception:
-                    pass  # Icon setting failed, continue without icon
+                pass  # Icon setting failed, continue without icon
 
         self._create_widgets()
         self._play_login_sound()
@@ -60,7 +59,7 @@ class MainApplication(ctk.CTk):
         """Play a sound file in background thread with cross-platform support."""
         def play():
             try:
-                sound_path = os.path.join(os.path.dirname(__file__), filename)
+                sound_path = get_gui_resource(filename)
                 if not os.path.exists(sound_path):
                     return
                 

@@ -1,8 +1,7 @@
 import customtkinter as ctk
 from PIL import Image, ImageTk
-import os
 from database import get_user_by_username
-from utils import verify_password
+from utils import verify_password, get_gui_resource
 
 
 class LoginWindow(ctk.CTk):
@@ -18,20 +17,19 @@ class LoginWindow(ctk.CTk):
         self.geometry("400x400")
         self.resizable(False, False)
 
-       # Set window icon
-        icon_path = os.path.join(os.path.dirname(__file__), "The_Uplink_App_Icon.ico")
-        if os.path.exists(icon_path):
+        # Set window icon
+        icon_path = get_gui_resource("The_Uplink_App_Icon.ico")
+        try:
+            # For .ico files on Windows, use wm_iconbitmap directly
+            self.iconbitmap(icon_path)
+        except Exception:
+            # Fallback for non-Windows or if iconbitmap fails
             try:
-                # For .ico files on Windows, use wm_iconbitmap directly
-                self.iconbitmap(icon_path)
+                icon_image = Image.open(icon_path)
+                self._icon_photo = ImageTk.PhotoImage(icon_image)
+                self.iconphoto(True, self._icon_photo)
             except Exception:
-                # Fallback for non-Windows or if iconbitmap fails
-                try:
-                    icon_image = Image.open(icon_path)
-                    self._icon_photo = ImageTk.PhotoImage(icon_image)
-                    self.iconphoto(True, self._icon_photo)
-                except Exception:
-                    pass  # Icon setting failed, continue without icon
+                pass  # Icon setting failed, continue without icon
 
         self._center_window()
         self._create_widgets()
@@ -52,15 +50,15 @@ class LoginWindow(ctk.CTk):
         main_frame.pack(expand=True, fill="both", padx=40, pady=40)
 
         # Logo
-        logo_path = os.path.join(os.path.dirname(__file__), "The Uplink logo.png")
-        if os.path.exists(logo_path):
+        logo_path = get_gui_resource("The Uplink logo.png")
+        try:
             logo_image = Image.open(logo_path)
             # Resize logo maintaining aspect ratio
             logo_image = logo_image.resize((200, 200), Image.LANCZOS)
             self._logo_photo = ctk.CTkImage(light_image=logo_image, dark_image=logo_image, size=(200, 200))
             logo_label = ctk.CTkLabel(main_frame, image=self._logo_photo, text="")
             logo_label.pack(pady=(0, 30))
-        else:
+        except Exception:
             # Fallback to text if image not found
             title_label = ctk.CTkLabel(
                 main_frame,
