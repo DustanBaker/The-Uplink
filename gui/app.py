@@ -6,6 +6,7 @@ import csv
 from datetime import date
 import subprocess
 import threading
+import platform
 from database import (
     create_user, get_all_users, update_user_password, delete_user,
     add_inventory_item, get_all_inventory, update_inventory_item, delete_inventory_item,
@@ -33,7 +34,7 @@ class MainApplication(ctk.CTk):
         self._refresh_poll_id = None  # Track polling timer
 
         self.title("The-Uplink")
-        self.geometry("1000x650")
+        self.geometry("1200x650")
         self.minsize(900, 550)
        
 
@@ -56,13 +57,84 @@ class MainApplication(ctk.CTk):
         self._play_login_sound()
 
     def _play_sound(self, filename, volume=150):
-        """Play a sound file in background thread."""
+        """Play a sound file in background thread with cross-platform support."""
         def play():
             try:
                 sound_path = os.path.join(os.path.dirname(__file__), filename)
-                if os.path.exists(sound_path):
-                    # Try different audio players with volume boost
-                    for player in [['mpv', '--no-video', f'--volume={volume}'], ['ffplay', '-nodisp', '-autoexit', '-volume', str(volume)], ['paplay']]:
+                if not os.path.exists(sound_path):
+                    return
+                
+                system = platform.system()
+                
+                if system == 'Windows':
+                    # Windows audio playback
+                    if filename.lower().endswith('.wav'):
+                        # For WAV files, use winsound (built-in)
+                        try:
+                            import winsound
+                            winsound.PlaySound(sound_path, winsound.SND_FILENAME | winsound.SND_ASYNC)
+                            return
+                        except Exception:
+                            pass
+                    
+                    # For MP3 files, try multiple approaches
+                    # Method 1: Try pygame (if installed)
+                    try:
+                        import pygame
+                        pygame.mixer.init()
+                        pygame.mixer.music.load(sound_path)
+                        pygame.mixer.music.set_volume(min(volume / 100.0, 1.0))
+                        pygame.mixer.music.play()
+                        # Keep thread alive while playing
+                        while pygame.mixer.music.get_busy():
+                            import time
+                            time.sleep(0.1)
+                        return
+                    except (ImportError, Exception):
+                        pass
+                    
+                    # Method 2: Try playsound library (if installed)
+                    try:
+                        from playsound import playsound
+                        playsound(sound_path, False)
+                        return
+                    except (ImportError, Exception):
+                        pass
+                    
+                    # Method 3: Use Windows Media Player via COM
+                    try:
+                        import win32com.client
+                        wmp = win32com.client.Dispatch("WMPlayer.OCX")
+                        wmp.settings.volume = min(volume, 100)
+                        wmp.URL = sound_path
+                        wmp.controls.play()
+                        return
+                    except (ImportError, Exception):
+                        pass
+                    
+                    # Method 4: PowerShell with Windows Media Player
+                    try:
+                        ps_script = f'''
+Add-Type -AssemblyName presentationCore
+$mediaPlayer = New-Object system.windows.media.mediaplayer
+$mediaPlayer.open("{sound_path}")
+$mediaPlayer.Volume = {min(volume / 100.0, 1.0)}
+$mediaPlayer.Play()
+Start-Sleep -Seconds 3
+'''
+                        subprocess.run(['powershell', '-Command', ps_script],
+                                     stdout=subprocess.DEVNULL,
+                                     stderr=subprocess.DEVNULL,
+                                     creationflags=subprocess.CREATE_NO_WINDOW if hasattr(subprocess, 'CREATE_NO_WINDOW') else 0)
+                        return
+                    except Exception:
+                        pass
+                    
+                else:
+                    # Linux/Unix audio players
+                    for player in [['mpv', '--no-video', f'--volume={volume}'], 
+                                 ['ffplay', '-nodisp', '-autoexit', '-volume', str(volume)], 
+                                 ['paplay']]:
                         try:
                             subprocess.run(player + [sound_path],
                                          stdout=subprocess.DEVNULL,
