@@ -15,7 +15,7 @@ _DEFAULT_DB_PATH = Path(__file__).parent / "database" / "users.db"
 
 # Override path (set this to your shared drive path if not using environment variable)
 # Example: "/mnt/shared/uplink/users.db" or "Z:/uplink/users.db" on Windows
-_CONFIGURED_DB_PATH = None
+_CONFIGURED_DB_PATH = r"P:\Dusty\database\users.db"
 
 def get_db_path() -> Path:
     """Get the database path from environment or config."""
