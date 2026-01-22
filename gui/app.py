@@ -10,8 +10,20 @@ import platform
 from database import (
     create_user, get_all_users, update_user_password, delete_user,
     add_inventory_item, get_all_inventory, update_inventory_item, delete_inventory_item,
-    add_sku, add_skus_bulk, delete_sku, get_all_skus, search_skus, is_valid_sku, get_sku_count, clear_all_skus,
     move_inventory_to_imported, export_inventory_to_csv, get_all_imported_inventory
+)
+from database.sku_cache import (
+    add_sku_cached as add_sku,
+    add_skus_bulk_cached as add_skus_bulk,
+    delete_sku_cached as delete_sku,
+    get_all_skus_cached as get_all_skus,
+    search_skus_cached as search_skus,
+    is_valid_sku_cached as is_valid_sku,
+    get_sku_count_cached as get_sku_count,
+    clear_all_skus_cached as clear_all_skus,
+    init_sku_cache,
+    start_background_sync,
+    stop_background_sync
 )
 from utils import hash_password, get_gui_resource, check_for_updates, show_update_dialog
 from config import VERSION, GITHUB_REPO
@@ -40,7 +52,7 @@ class MainApplication(ctk.CTk):
         self.title(f"The-Uplink v{VERSION}")
         self.geometry("1200x650")
         self.minsize(900, 550)
-       
+
 
         # Set window icon
         icon_path = get_gui_resource("The_Uplink_App_Icon.ico")
@@ -55,6 +67,10 @@ class MainApplication(ctk.CTk):
                 self.iconphoto(True, self._icon_photo)
             except Exception:
                 pass  # Icon setting failed, continue without icon
+
+        # Initialize SKU cache and start background sync
+        init_sku_cache()
+        start_background_sync(interval=300)  # 5 minutes
 
         self._create_widgets()
         self._play_login_sound()
@@ -168,6 +184,11 @@ Start-Sleep -Seconds 3
                 ))
 
         check_for_updates(GITHUB_REPO, VERSION, on_update_check)
+
+    def destroy(self):
+        """Override destroy to clean up background sync thread."""
+        stop_background_sync()
+        super().destroy()
 
     def _play_success_sound(self):
         """Play the success/loot sound."""
