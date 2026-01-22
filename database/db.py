@@ -66,19 +66,45 @@ def init_db():
         )
     """)
 
-    # Approved SKUs table
+    # Approved SKUs table (with project column for separate lists per project)
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS approved_skus (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            sku TEXT UNIQUE NOT NULL,
+            sku TEXT NOT NULL,
             description TEXT,
-            created_at TEXT NOT NULL
+            project TEXT NOT NULL DEFAULT 'ecoflow',
+            created_at TEXT NOT NULL,
+            UNIQUE(sku, project)
         )
     """)
 
+    # Migration: Add project column if it doesn't exist (for existing databases)
+    cursor.execute("PRAGMA table_info(approved_skus)")
+    columns = [row[1] for row in cursor.fetchall()]
+    if 'project' not in columns:
+        # Add the project column with default value
+        cursor.execute("ALTER TABLE approved_skus ADD COLUMN project TEXT NOT NULL DEFAULT 'ecoflow'")
+        # Drop old unique constraint and index by recreating the table
+        cursor.execute("""
+            CREATE TABLE approved_skus_new (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                sku TEXT NOT NULL,
+                description TEXT,
+                project TEXT NOT NULL DEFAULT 'ecoflow',
+                created_at TEXT NOT NULL,
+                UNIQUE(sku, project)
+            )
+        """)
+        cursor.execute("""
+            INSERT INTO approved_skus_new (id, sku, description, project, created_at)
+            SELECT id, sku, description, 'ecoflow', created_at FROM approved_skus
+        """)
+        cursor.execute("DROP TABLE approved_skus")
+        cursor.execute("ALTER TABLE approved_skus_new RENAME TO approved_skus")
+
     # Create index for fast SKU lookups and autocomplete
     cursor.execute("""
-        CREATE INDEX IF NOT EXISTS idx_sku ON approved_skus(sku)
+        CREATE INDEX IF NOT EXISTS idx_sku_project ON approved_skus(sku, project)
     """)
 
     conn.commit()
@@ -190,17 +216,17 @@ def delete_user(username: str) -> bool:
 # ==================== SKU Functions ====================
 
 @with_retry
-def add_sku(sku: str, description: str = "") -> bool:
-    """Add an approved SKU to the database.
+def add_sku(sku: str, description: str = "", project: str = "ecoflow") -> bool:
+    """Add an approved SKU to the database for a specific project.
 
-    Returns True if successful, False if SKU already exists.
+    Returns True if successful, False if SKU already exists for that project.
     """
     conn = get_connection()
     cursor = conn.cursor()
     try:
         cursor.execute(
-            "INSERT INTO approved_skus (sku, description, created_at) VALUES (?, ?, ?)",
-            (sku.strip().upper(), description.strip(), datetime.now().isoformat())
+            "INSERT INTO approved_skus (sku, description, project, created_at) VALUES (?, ?, ?, ?)",
+            (sku.strip().upper(), description.strip(), project.lower(), datetime.now().isoformat())
         )
         conn.commit()
         return True
@@ -211,11 +237,12 @@ def add_sku(sku: str, description: str = "") -> bool:
 
 
 @with_retry
-def add_skus_bulk(skus: list[tuple[str, str]]) -> tuple[int, int]:
-    """Add multiple SKUs to the database.
+def add_skus_bulk(skus: list[tuple[str, str]], project: str = "ecoflow") -> tuple[int, int]:
+    """Add multiple SKUs to the database for a specific project.
 
     Args:
         skus: List of (sku, description) tuples
+        project: Project name (ecoflow or halo)
 
     Returns:
         Tuple of (successful_count, failed_count)
@@ -225,12 +252,13 @@ def add_skus_bulk(skus: list[tuple[str, str]]) -> tuple[int, int]:
     success = 0
     failed = 0
     timestamp = datetime.now().isoformat()
+    project = project.lower()
 
     for sku, description in skus:
         try:
             cursor.execute(
-                "INSERT INTO approved_skus (sku, description, created_at) VALUES (?, ?, ?)",
-                (sku.strip().upper(), description.strip() if description else "", timestamp)
+                "INSERT INTO approved_skus (sku, description, project, created_at) VALUES (?, ?, ?, ?)",
+                (sku.strip().upper(), description.strip() if description else "", project, timestamp)
             )
             success += 1
         except sqlite3.IntegrityError:
@@ -242,14 +270,14 @@ def add_skus_bulk(skus: list[tuple[str, str]]) -> tuple[int, int]:
 
 
 @with_retry
-def delete_sku(sku: str) -> bool:
-    """Delete an approved SKU from the database.
+def delete_sku(sku: str, project: str = "ecoflow") -> bool:
+    """Delete an approved SKU from the database for a specific project.
 
     Returns True if successful, False if SKU not found.
     """
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM approved_skus WHERE sku = ?", (sku.upper(),))
+    cursor.execute("DELETE FROM approved_skus WHERE sku = ? AND project = ?", (sku.upper(), project.lower()))
     conn.commit()
     affected = cursor.rowcount
     conn.close()
@@ -257,11 +285,11 @@ def delete_sku(sku: str) -> bool:
 
 
 @with_retry
-def get_all_skus() -> list[dict]:
-    """Get all approved SKUs from the database."""
+def get_all_skus(project: str = "ecoflow") -> list[dict]:
+    """Get all approved SKUs from the database for a specific project."""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, sku, description, created_at FROM approved_skus ORDER BY sku")
+    cursor.execute("SELECT id, sku, description, created_at FROM approved_skus WHERE project = ? ORDER BY sku", (project.lower(),))
     rows = cursor.fetchall()
     conn.close()
 
@@ -277,16 +305,16 @@ def get_all_skus() -> list[dict]:
 
 
 @with_retry
-def search_skus(prefix: str, limit: int = 10) -> list[dict]:
-    """Search for SKUs matching a prefix (for autocomplete).
+def search_skus(prefix: str, limit: int = 10, project: str = "ecoflow") -> list[dict]:
+    """Search for SKUs matching a prefix (for autocomplete) within a specific project.
 
     Returns up to `limit` matching SKUs.
     """
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id, sku, description FROM approved_skus WHERE sku LIKE ? ORDER BY sku LIMIT ?",
-        (prefix.upper() + "%", limit)
+        "SELECT id, sku, description FROM approved_skus WHERE sku LIKE ? AND project = ? ORDER BY sku LIMIT ?",
+        (prefix.upper() + "%", project.lower(), limit)
     )
     rows = cursor.fetchall()
     conn.close()
@@ -302,33 +330,33 @@ def search_skus(prefix: str, limit: int = 10) -> list[dict]:
 
 
 @with_retry
-def is_valid_sku(sku: str) -> bool:
-    """Check if a SKU is in the approved list."""
+def is_valid_sku(sku: str, project: str = "ecoflow") -> bool:
+    """Check if a SKU is in the approved list for a specific project."""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT 1 FROM approved_skus WHERE sku = ?", (sku.strip().upper(),))
+    cursor.execute("SELECT 1 FROM approved_skus WHERE sku = ? AND project = ?", (sku.strip().upper(), project.lower()))
     result = cursor.fetchone()
     conn.close()
     return result is not None
 
 
 @with_retry
-def get_sku_count() -> int:
-    """Get the total number of approved SKUs."""
+def get_sku_count(project: str = "ecoflow") -> int:
+    """Get the total number of approved SKUs for a specific project."""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT COUNT(*) FROM approved_skus")
+    cursor.execute("SELECT COUNT(*) FROM approved_skus WHERE project = ?", (project.lower(),))
     count = cursor.fetchone()[0]
     conn.close()
     return count
 
 
 @with_retry
-def clear_all_skus() -> int:
-    """Delete all approved SKUs. Returns the number deleted."""
+def clear_all_skus(project: str = "ecoflow") -> int:
+    """Delete all approved SKUs for a specific project. Returns the number deleted."""
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("DELETE FROM approved_skus")
+    cursor.execute("DELETE FROM approved_skus WHERE project = ?", (project.lower(),))
     conn.commit()
     affected = cursor.rowcount
     conn.close()

@@ -34,6 +34,7 @@ class MainApplication(ctk.CTk):
         self._refresh_poll_id = None  # Track polling timer
         self.project_widgets = {}  # Store per-project widget references (user panel)
         self.admin_project_widgets = {}  # Store per-project widget references (admin panel)
+        self.admin_sku_widgets = {}  # Store per-project SKU widget references (admin panel)
 
         self.title("The-Uplink")
         self.geometry("1200x650")
@@ -272,24 +273,33 @@ Start-Sleep -Seconds 3
         lpn_entry.pack()
         self.project_widgets[project]['lpn_entry'] = lpn_entry
 
-        # Location
+        # Location (dropdown with project-specific options)
         location_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
         location_frame.pack(side="left", padx=(0, 15))
         ctk.CTkLabel(location_frame, text="Location", font=ctk.CTkFont(size=14)).pack(anchor="w")
-        location_entry = ctk.CTkEntry(location_frame, width=120, font=ctk.CTkFont(size=14))
-        location_entry.pack()
-        self.project_widgets[project]['location_entry'] = location_entry
+        if project == "halo":
+            location_options = ["INPROD01", "Halocage2"]
+        else:
+            location_options = ["EFINPROD01"]
+        location_dropdown = ctk.CTkOptionMenu(location_frame, width=140, values=location_options, font=ctk.CTkFont(size=14))
+        location_dropdown.set(location_options[0])
+        location_dropdown.pack()
+        self.project_widgets[project]['location_dropdown'] = location_dropdown
 
-        # Repair State
-        repair_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
-        repair_frame.pack(side="left", padx=(0, 15))
-        ctk.CTkLabel(repair_frame, text="Repair State", font=ctk.CTkFont(size=14)).pack(anchor="w")
-        repair_options = ["Temporary Storage","To be repaired", "To be refurbished","To be Scrapped","Storage only","Good Spare Parts","Refurbished","Repaired"]
-        repair_dropdown = ctk.CTkOptionMenu(repair_frame, width=170, values=repair_options, font=ctk.CTkFont(size=14))
-        repair_dropdown.set(repair_options[0])
-        repair_dropdown.pack()
-        self.project_widgets[project]['repair_dropdown'] = repair_dropdown
-        self.project_widgets[project]['repair_options'] = repair_options
+        # Repair State (only shown for EcoFlow, not for Halo)
+        if project != "halo":
+            repair_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
+            repair_frame.pack(side="left", padx=(0, 15))
+            ctk.CTkLabel(repair_frame, text="Repair State", font=ctk.CTkFont(size=14)).pack(anchor="w")
+            repair_options = ["Temporary Storage","To be repaired", "To be refurbished","To be Scrapped","Storage only","Good Spare Parts","Refurbished","Repaired"]
+            repair_dropdown = ctk.CTkOptionMenu(repair_frame, width=170, values=repair_options, font=ctk.CTkFont(size=14))
+            repair_dropdown.set(repair_options[0])
+            repair_dropdown.pack()
+            self.project_widgets[project]['repair_dropdown'] = repair_dropdown
+            self.project_widgets[project]['repair_options'] = repair_options
+        else:
+            self.project_widgets[project]['repair_dropdown'] = None
+            self.project_widgets[project]['repair_options'] = []
 
         # Submit button and status
         submit_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
@@ -608,8 +618,8 @@ Start-Sleep -Seconds 3
             self._hide_sku_suggestions(None, project)
             return
 
-        # Get matching SKUs
-        matches = search_skus(text, limit=8)
+        # Get matching SKUs for this project
+        matches = search_skus(text, limit=8, project=project)
 
         if matches:
             self._show_sku_suggestions(matches, project)
@@ -678,22 +688,28 @@ Start-Sleep -Seconds 3
         sku = widgets['sku_entry'].get().strip()
         serial = widgets['serial_entry'].get().strip()
         lpn = widgets['lpn_entry'].get().strip()
-        location = widgets['location_entry'].get().strip()
-        repair_state = widgets['repair_dropdown'].get()
+        location = widgets['location_dropdown'].get()
+        repair_state = widgets['repair_dropdown'].get() if widgets['repair_dropdown'] else ""
 
         # Basic validation
         if not sku:
             self._show_user_status("Item SKU is required", project, error=True)
             return
 
-        # Validate SKU against approved list
-        if not is_valid_sku(sku):
+        # Validate SKU against approved list for this project
+        if not is_valid_sku(sku, project):
             self._show_user_status(f"Invalid SKU: '{sku}' not in approved list", project, error=True)
             return
 
         if not serial:
             self._show_user_status("Serial Number is required", project, error=True)
             return
+
+        # Halo serial numbers must be exactly 12 alphanumeric characters
+        if project == "halo":
+            if not serial.isalnum() or len(serial) != 12:
+                self._show_user_status("Serial Number must be exactly 12 alphanumeric characters", project, error=True)
+                return
 
         if not lpn:
             self._show_user_status("LPN is required", project, error=True)
@@ -725,8 +741,8 @@ Start-Sleep -Seconds 3
         widgets['sku_entry'].delete(0, 'end')
         widgets['serial_entry'].delete(0, 'end')
         widgets['lpn_entry'].delete(0, 'end')
-        widgets['location_entry'].delete(0, 'end')
-        widgets['repair_dropdown'].set(widgets['repair_options'][0])
+        if widgets['repair_dropdown']:
+            widgets['repair_dropdown'].set(widgets['repair_options'][0])
 
         # Refresh inventory list
         self._refresh_inventory_list(project)
@@ -873,7 +889,23 @@ Start-Sleep -Seconds 3
         self._refresh_user_list()
 
     def _create_skus_tab(self, parent):
-        """Create the SKU management tab."""
+        """Create the SKU management tab with project sub-tabs."""
+        # Create project tabview (EcoFlow / Halo)
+        project_tabview = ctk.CTkTabview(parent)
+        project_tabview.pack(expand=True, fill="both", padx=5, pady=5)
+
+        project_tabview.add("EcoFlow")
+        project_tabview.add("Halo")
+
+        # Create SKU management for each project
+        self._create_project_skus_content(project_tabview.tab("EcoFlow"), "ecoflow")
+        self._create_project_skus_content(project_tabview.tab("Halo"), "halo")
+
+    def _create_project_skus_content(self, parent, project: str):
+        """Create the SKU management content for a specific project."""
+        # Initialize widget storage for this project
+        self.admin_sku_widgets[project] = {}
+
         # Configure grid
         parent.grid_columnconfigure(0, weight=0)
         parent.grid_columnconfigure(1, weight=1)
@@ -894,12 +926,13 @@ Start-Sleep -Seconds 3
         )
         stats_title.pack(pady=(10, 5))
 
-        self.sku_count_label = ctk.CTkLabel(
+        sku_count_label = ctk.CTkLabel(
             stats_frame,
-            text=f"Total SKUs: {get_sku_count()}",
+            text=f"Total SKUs: {get_sku_count(project)}",
             font=ctk.CTkFont(size=14)
         )
-        self.sku_count_label.pack(pady=(0, 10))
+        sku_count_label.pack(pady=(0, 10))
+        self.admin_sku_widgets[project]['sku_count_label'] = sku_count_label
 
         # Import section
         import_title = ctk.CTkLabel(
@@ -914,7 +947,7 @@ Start-Sleep -Seconds 3
             text="Import from CSV",
             width=220,
             font=ctk.CTkFont(size=14),
-            command=self._import_skus_csv
+            command=lambda p=project: self._import_skus_csv(p)
         )
         import_btn.pack(pady=(0, 5))
 
@@ -925,7 +958,7 @@ Start-Sleep -Seconds 3
             font=ctk.CTkFont(size=14),
             fg_color="#dc3545",
             hover_color="#c82333",
-            command=self._clear_all_skus
+            command=lambda p=project: self._clear_all_skus(p)
         )
         clear_btn.pack(pady=(0, 15))
 
@@ -941,22 +974,25 @@ Start-Sleep -Seconds 3
         form_frame.pack(padx=20, pady=(0, 15))
 
         ctk.CTkLabel(form_frame, text="SKU", font=ctk.CTkFont(size=14)).grid(row=0, column=0, sticky="w", pady=(0, 5))
-        self.new_sku_entry = ctk.CTkEntry(form_frame, width=220, font=ctk.CTkFont(size=14))
-        self.new_sku_entry.grid(row=1, column=0, pady=(0, 10))
+        new_sku_entry = ctk.CTkEntry(form_frame, width=220, font=ctk.CTkFont(size=14))
+        new_sku_entry.grid(row=1, column=0, pady=(0, 10))
+        self.admin_sku_widgets[project]['new_sku_entry'] = new_sku_entry
 
         ctk.CTkLabel(form_frame, text="Description (optional)", font=ctk.CTkFont(size=14)).grid(row=2, column=0, sticky="w", pady=(0, 5))
-        self.new_sku_desc_entry = ctk.CTkEntry(form_frame, width=220, font=ctk.CTkFont(size=14))
-        self.new_sku_desc_entry.grid(row=3, column=0, pady=(0, 10))
+        new_sku_desc_entry = ctk.CTkEntry(form_frame, width=220, font=ctk.CTkFont(size=14))
+        new_sku_desc_entry.grid(row=3, column=0, pady=(0, 10))
+        self.admin_sku_widgets[project]['new_sku_desc_entry'] = new_sku_desc_entry
 
-        self.sku_status_label = ctk.CTkLabel(form_frame, text="", width=220, font=ctk.CTkFont(size=14))
-        self.sku_status_label.grid(row=4, column=0, pady=(0, 10))
+        sku_status_label = ctk.CTkLabel(form_frame, text="", width=220, font=ctk.CTkFont(size=14))
+        sku_status_label.grid(row=4, column=0, pady=(0, 10))
+        self.admin_sku_widgets[project]['sku_status_label'] = sku_status_label
 
         add_sku_btn = ctk.CTkButton(
             form_frame,
             text="Add SKU",
             width=220,
             font=ctk.CTkFont(size=14),
-            command=self._handle_add_sku
+            command=lambda p=project: self._handle_add_sku(p)
         )
         add_sku_btn.grid(row=5, column=0)
 
@@ -969,9 +1005,10 @@ Start-Sleep -Seconds 3
         search_frame.pack(pady=(15, 10), padx=20, fill="x")
 
         ctk.CTkLabel(search_frame, text="Search SKUs:", font=ctk.CTkFont(size=14)).pack(side="left", padx=(0, 10))
-        self.sku_search_entry = ctk.CTkEntry(search_frame, width=300, font=ctk.CTkFont(size=14))
-        self.sku_search_entry.pack(side="left", padx=(0, 10))
-        self.sku_search_entry.bind("<KeyRelease>", lambda e: self._filter_sku_list())
+        sku_search_entry = ctk.CTkEntry(search_frame, width=300, font=ctk.CTkFont(size=14))
+        sku_search_entry.pack(side="left", padx=(0, 10))
+        sku_search_entry.bind("<KeyRelease>", lambda e, p=project: self._filter_sku_list(p))
+        self.admin_sku_widgets[project]['sku_search_entry'] = sku_search_entry
 
         # SKU list
         list_title = ctk.CTkLabel(
@@ -981,14 +1018,15 @@ Start-Sleep -Seconds 3
         )
         list_title.pack(pady=(5, 10), padx=20)
 
-        self.sku_list_frame = ctk.CTkScrollableFrame(list_frame)
-        self.sku_list_frame.pack(expand=True, fill="both", padx=10, pady=(0, 10))
+        sku_list_frame = ctk.CTkScrollableFrame(list_frame)
+        sku_list_frame.pack(expand=True, fill="both", padx=10, pady=(0, 10))
+        self.admin_sku_widgets[project]['sku_list_frame'] = sku_list_frame
 
-        self.sku_list_frame.grid_columnconfigure(0, weight=1)
-        self.sku_list_frame.grid_columnconfigure(1, weight=2)
-        self.sku_list_frame.grid_columnconfigure(2, weight=0)
+        sku_list_frame.grid_columnconfigure(0, weight=1)
+        sku_list_frame.grid_columnconfigure(1, weight=2)
+        sku_list_frame.grid_columnconfigure(2, weight=0)
 
-        self._refresh_sku_list()
+        self._refresh_sku_list(project=project)
 
     def _create_inventory_tab(self, parent):
         """Create the inventory viewing tab for admin with project tabs."""
@@ -1220,80 +1258,87 @@ Start-Sleep -Seconds 3
             dialog.wait_visibility()
             dialog.grab_set()
 
-    def _refresh_sku_list(self, filter_text: str = ""):
-        """Refresh the SKU list display."""
-        for widget in self.sku_list_frame.winfo_children():
+    def _refresh_sku_list(self, filter_text: str = "", project: str = "ecoflow"):
+        """Refresh the SKU list display for a specific project."""
+        widgets = self.admin_sku_widgets[project]
+        sku_list_frame = widgets['sku_list_frame']
+
+        for widget in sku_list_frame.winfo_children():
             widget.destroy()
 
         # Header row
         headers = ["SKU", "Description", ""]
         for col, header in enumerate(headers):
             label = ctk.CTkLabel(
-                self.sku_list_frame,
+                sku_list_frame,
                 text=header,
                 font=ctk.CTkFont(size=14, weight="bold")
             )
             label.grid(row=0, column=col, padx=5, pady=(0, 10), sticky="w")
 
-        # Get SKUs (filtered or all)
+        # Get SKUs (filtered or all) for this project
         if filter_text:
-            skus = search_skus(filter_text, limit=100)
+            skus = search_skus(filter_text, limit=100, project=project)
         else:
-            skus = get_all_skus()[:100]  # Limit display to 100 for performance
+            skus = get_all_skus(project)[:100]  # Limit display to 100 for performance
 
         for row, sku in enumerate(skus, start=1):
-            ctk.CTkLabel(self.sku_list_frame, text=sku['sku'], font=ctk.CTkFont(size=14)).grid(
+            ctk.CTkLabel(sku_list_frame, text=sku['sku'], font=ctk.CTkFont(size=14)).grid(
                 row=row, column=0, padx=5, pady=3, sticky="w")
-            ctk.CTkLabel(self.sku_list_frame, text=sku.get('description', ''), font=ctk.CTkFont(size=14)).grid(
+            ctk.CTkLabel(sku_list_frame, text=sku.get('description', ''), font=ctk.CTkFont(size=14)).grid(
                 row=row, column=1, padx=5, pady=3, sticky="w")
 
             delete_btn = ctk.CTkButton(
-                self.sku_list_frame,
+                sku_list_frame,
                 text="Delete",
                 width=70,
                 height=28,
                 font=ctk.CTkFont(size=13),
                 fg_color="#dc3545",
                 hover_color="#c82333",
-                command=lambda s=sku['sku']: self._handle_delete_sku(s)
+                command=lambda s=sku['sku'], p=project: self._handle_delete_sku(s, p)
             )
             delete_btn.grid(row=row, column=2, padx=5, pady=3)
 
         # Update count
-        self.sku_count_label.configure(text=f"Total SKUs: {get_sku_count()}")
+        widgets['sku_count_label'].configure(text=f"Total SKUs: {get_sku_count(project)}")
 
-    def _filter_sku_list(self):
-        """Filter SKU list based on search entry."""
-        filter_text = self.sku_search_entry.get().strip()
-        self._refresh_sku_list(filter_text)
+    def _filter_sku_list(self, project: str = "ecoflow"):
+        """Filter SKU list based on search entry for a specific project."""
+        filter_text = self.admin_sku_widgets[project]['sku_search_entry'].get().strip()
+        self._refresh_sku_list(filter_text, project)
 
-    def _handle_add_sku(self):
-        """Handle adding a new SKU."""
-        sku = self.new_sku_entry.get().strip()
-        description = self.new_sku_desc_entry.get().strip()
+    def _handle_add_sku(self, project: str = "ecoflow"):
+        """Handle adding a new SKU for a specific project."""
+        widgets = self.admin_sku_widgets[project]
+        sku = widgets['new_sku_entry'].get().strip()
+        description = widgets['new_sku_desc_entry'].get().strip()
 
         if not sku:
-            self.sku_status_label.configure(text="SKU is required", text_color="red")
+            widgets['sku_status_label'].configure(text="SKU is required", text_color="red")
             self._play_error_sound()
             return
 
-        if add_sku(sku, description):
-            self.sku_status_label.configure(text=f"Added: {sku.upper()}", text_color="green")
-            self.new_sku_entry.delete(0, 'end')
-            self.new_sku_desc_entry.delete(0, 'end')
-            self._refresh_sku_list()
+        if add_sku(sku, description, project):
+            widgets['sku_status_label'].configure(text=f"Added: {sku.upper()}", text_color="green")
+            widgets['new_sku_entry'].delete(0, 'end')
+            widgets['new_sku_desc_entry'].delete(0, 'end')
+            self._refresh_sku_list(project=project)
             self._play_success_sound()
         else:
-            self.sku_status_label.configure(text="SKU already exists", text_color="red")
+            widgets['sku_status_label'].configure(text="SKU already exists", text_color="red")
             self._play_error_sound()
 
-    def _handle_delete_sku(self, sku: str):
-        """Handle deleting a SKU."""
-        if delete_sku(sku):
-            self._refresh_sku_list(self.sku_search_entry.get().strip())
+    def _handle_delete_sku(self, sku: str, project: str = "ecoflow"):
+        """Handle deleting a SKU for a specific project."""
+        if delete_sku(sku, project):
+            filter_text = self.admin_sku_widgets[project]['sku_search_entry'].get().strip()
+            self._refresh_sku_list(filter_text, project)
 
-    def _import_skus_csv(self):
-        """Import SKUs from a CSV file."""
+    def _import_skus_csv(self, project: str = "ecoflow"):
+        """Import SKUs from a CSV file for a specific project."""
+        widgets = self.admin_sku_widgets[project]
+
         filepath = filedialog.askopenfilename(
             title="Select CSV file",
             filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
@@ -1322,19 +1367,21 @@ Start-Sleep -Seconds 3
                         if sku:
                             skus_to_add.append((sku, desc))
 
-            success, failed = add_skus_bulk(skus_to_add)
-            self.sku_status_label.configure(
+            success, failed = add_skus_bulk(skus_to_add, project)
+            widgets['sku_status_label'].configure(
                 text=f"Imported {success}, skipped {failed} duplicates",
                 text_color="green" if success > 0 else "orange"
             )
-            self._refresh_sku_list()
+            self._refresh_sku_list(project=project)
 
         except Exception as e:
-            self.sku_status_label.configure(text=f"Error: {str(e)}", text_color="red")
+            widgets['sku_status_label'].configure(text=f"Error: {str(e)}", text_color="red")
             self._play_error_sound()
 
-    def _clear_all_skus(self):
-        """Clear all SKUs with confirmation."""
+    def _clear_all_skus(self, project: str = "ecoflow"):
+        """Clear all SKUs for a specific project with confirmation."""
+        widgets = self.admin_sku_widgets[project]
+
         dialog = ctk.CTkToplevel(self)
         dialog.title("Confirm Clear All")
         dialog.geometry("350x180")
@@ -1352,19 +1399,20 @@ Start-Sleep -Seconds 3
         frame = ctk.CTkFrame(dialog, fg_color="transparent")
         frame.pack(expand=True, fill="both", padx=20, pady=20)
 
-        count = get_sku_count()
+        count = get_sku_count(project)
+        project_name = project.capitalize()
         label = ctk.CTkLabel(
             frame,
-            text=f"Delete all {count} SKUs?\nThis cannot be undone.",
+            text=f"Delete all {count} {project_name} SKUs?\nThis cannot be undone.",
             font=ctk.CTkFont(size=16)
         )
         label.pack(pady=(0, 20))
 
         def do_clear():
-            deleted = clear_all_skus()
+            deleted = clear_all_skus(project)
             dialog.destroy()
-            self.sku_status_label.configure(text=f"Deleted {deleted} SKUs", text_color="green")
-            self._refresh_sku_list()
+            widgets['sku_status_label'].configure(text=f"Deleted {deleted} SKUs", text_color="green")
+            self._refresh_sku_list(project=project)
 
         button_frame = ctk.CTkFrame(frame, fg_color="transparent")
         button_frame.pack(fill="x")
