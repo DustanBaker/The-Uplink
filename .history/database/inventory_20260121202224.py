@@ -331,8 +331,7 @@ def export_inventory_to_csv(items: list[dict], filepath: str, project: str = "ec
 
                 for item in items:
                     created = item['created_at']
-                    i
-                    f 'T' in created:
+                    if 'T' in created:
                         rec_date = created.replace('T', ' ').split('.')[0]
                     else:
                         rec_date = created[:19]
