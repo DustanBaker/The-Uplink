@@ -4,6 +4,7 @@ from .db import (
     get_user_by_username,
     get_all_users,
     update_user_password,
+    update_user_admin_status,
     delete_user,
     # SKU functions
     add_sku,

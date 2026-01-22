@@ -62,9 +62,17 @@ def init_db():
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             username TEXT UNIQUE NOT NULL,
             password_hash TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            is_admin INTEGER DEFAULT 0
         )
     """)
+    # Add is_admin column if it doesn't exist (for existing databases)
+    try:
+        cursor.execute("ALTER TABLE users ADD COLUMN is_admin INTEGER DEFAULT 0")
+    except:
+        pass  # Column already exists
+    # Ensure the 'admin' user always has admin privileges
+    cursor.execute("UPDATE users SET is_admin = 1 WHERE username = 'admin'")
 
     # Approved SKUs table (with project column for separate lists per project)
     cursor.execute("""
@@ -112,7 +120,7 @@ def init_db():
 
 
 @with_retry
-def create_user(username: str, password_hash: str) -> bool:
+def create_user(username: str, password_hash: str, is_admin: bool = False) -> bool:
     """Create a new user in the database.
 
     Returns True if successful, False if username already exists.
@@ -121,8 +129,8 @@ def create_user(username: str, password_hash: str) -> bool:
     cursor = conn.cursor()
     try:
         cursor.execute(
-            "INSERT INTO users (username, password_hash, created_at) VALUES (?, ?, ?)",
-            (username, password_hash, datetime.now().isoformat())
+            "INSERT INTO users (username, password_hash, created_at, is_admin) VALUES (?, ?, ?, ?)",
+            (username, password_hash, datetime.now().isoformat(), 1 if is_admin else 0)
         )
         conn.commit()
         return True
@@ -141,7 +149,7 @@ def get_user_by_username(username: str) -> dict | None:
     conn = get_connection()
     cursor = conn.cursor()
     cursor.execute(
-        "SELECT id, username, password_hash, created_at FROM users WHERE username = ?",
+        "SELECT id, username, password_hash, created_at, is_admin FROM users WHERE username = ?",
         (username,)
     )
     row = cursor.fetchone()
@@ -152,7 +160,8 @@ def get_user_by_username(username: str) -> dict | None:
             "id": row[0],
             "username": row[1],
             "password_hash": row[2],
-            "created_at": row[3]
+            "created_at": row[3],
+            "is_admin": bool(row[4]) if len(row) > 4 and row[4] is not None else (row[1] == 'admin')
         }
     return None
 
@@ -165,7 +174,7 @@ def get_all_users() -> list[dict]:
     """
     conn = get_connection()
     cursor = conn.cursor()
-    cursor.execute("SELECT id, username, password_hash, created_at FROM users ORDER BY username")
+    cursor.execute("SELECT id, username, password_hash, created_at, is_admin FROM users ORDER BY username")
     rows = cursor.fetchall()
     conn.close()
 
@@ -174,7 +183,8 @@ def get_all_users() -> list[dict]:
             "id": row[0],
             "username": row[1],
             "password_hash": row[2],
-            "created_at": row[3]
+            "created_at": row[3],
+            "is_admin": bool(row[4]) if len(row) > 4 and row[4] is not None else (row[1] == 'admin')
         }
         for row in rows
     ]
@@ -191,6 +201,27 @@ def update_user_password(username: str, new_password_hash: str) -> bool:
     cursor.execute(
         "UPDATE users SET password_hash = ? WHERE username = ?",
         (new_password_hash, username)
+    )
+    conn.commit()
+    affected = cursor.rowcount
+    conn.close()
+    return affected > 0
+
+
+@with_retry
+def update_user_admin_status(username: str, is_admin: bool) -> bool:
+    """Update a user's admin status.
+
+    Returns True if successful, False if user not found.
+    Note: The 'admin' user cannot have admin status removed.
+    """
+    if username == 'admin' and not is_admin:
+        return False  # Cannot remove admin status from 'admin' user
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE users SET is_admin = ? WHERE username = ?",
+        (1 if is_admin else 0, username)
     )
     conn.commit()
     affected = cursor.rowcount

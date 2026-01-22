@@ -69,12 +69,18 @@ def init_inventory_db(project: str = "ecoflow"):
             location TEXT DEFAULT '',
             repair_state TEXT NOT NULL,
             entered_by TEXT NOT NULL,
-            created_at TEXT NOT NULL
+            created_at TEXT NOT NULL,
+            order_number TEXT DEFAULT ''
         )
     """)
     # Add location column if it doesn't exist (for existing databases)
     try:
         cursor.execute("ALTER TABLE inventory ADD COLUMN location TEXT DEFAULT ''")
+    except:
+        pass  # Column already exists
+    # Add order_number column if it doesn't exist (for existing databases)
+    try:
+        cursor.execute("ALTER TABLE inventory ADD COLUMN order_number TEXT DEFAULT ''")
     except:
         pass  # Column already exists
     conn.commit()
@@ -84,7 +90,7 @@ def init_inventory_db(project: str = "ecoflow"):
 @with_retry
 def add_inventory_item(item_sku: str, serial_number: str, lpn: str,
                        location: str, repair_state: str, entered_by: str,
-                       project: str = "ecoflow") -> int:
+                       project: str = "ecoflow", order_number: str = "") -> int:
     """Add a new inventory item to the database.
 
     Returns the ID of the new item.
@@ -93,9 +99,9 @@ def add_inventory_item(item_sku: str, serial_number: str, lpn: str,
     cursor = conn.cursor()
     cursor.execute(
         """INSERT INTO inventory
-           (item_sku, serial_number, lpn, location, repair_state, entered_by, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?)""",
-        (item_sku, serial_number, lpn, location, repair_state, entered_by, datetime.now().isoformat())
+           (item_sku, serial_number, lpn, location, repair_state, entered_by, created_at, order_number)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+        (item_sku, serial_number, lpn, location, repair_state, entered_by, datetime.now().isoformat(), order_number)
     )
     conn.commit()
     item_id = cursor.lastrowid
@@ -109,7 +115,7 @@ def get_all_inventory(project: str = "ecoflow") -> list[dict]:
     conn = get_connection(project)
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, item_sku, serial_number, lpn, location, repair_state, entered_by, created_at
+        SELECT id, item_sku, serial_number, lpn, location, repair_state, entered_by, created_at, order_number
         FROM inventory
         ORDER BY created_at DESC
     """)
@@ -125,7 +131,8 @@ def get_all_inventory(project: str = "ecoflow") -> list[dict]:
             "location": row[4] or '',
             "repair_state": row[5],
             "entered_by": row[6],
-            "created_at": row[7]
+            "created_at": row[7],
+            "order_number": row[8] or '' if len(row) > 8 else ''
         }
         for row in rows
     ]
@@ -137,7 +144,7 @@ def get_inventory_by_user(username: str, project: str = "ecoflow") -> list[dict]
     conn = get_connection(project)
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, item_sku, serial_number, lpn, location, repair_state, entered_by, created_at
+        SELECT id, item_sku, serial_number, lpn, location, repair_state, entered_by, created_at, order_number
         FROM inventory
         WHERE entered_by = ?
         ORDER BY created_at DESC
@@ -154,7 +161,8 @@ def get_inventory_by_user(username: str, project: str = "ecoflow") -> list[dict]
             "location": row[4] or '',
             "repair_state": row[5],
             "entered_by": row[6],
-            "created_at": row[7]
+            "created_at": row[7],
+            "order_number": row[8] or '' if len(row) > 8 else ''
         }
         for row in rows
     ]
@@ -163,7 +171,7 @@ def get_inventory_by_user(username: str, project: str = "ecoflow") -> list[dict]
 @with_retry
 def update_inventory_item(item_id: int, item_sku: str, serial_number: str,
                           lpn: str, location: str, repair_state: str,
-                          project: str = "ecoflow") -> bool:
+                          project: str = "ecoflow", order_number: str = "") -> bool:
     """Update an existing inventory item.
 
     Returns True if successful, False if item not found.
@@ -172,9 +180,9 @@ def update_inventory_item(item_id: int, item_sku: str, serial_number: str,
     cursor = conn.cursor()
     cursor.execute(
         """UPDATE inventory
-           SET item_sku = ?, serial_number = ?, lpn = ?, location = ?, repair_state = ?
+           SET item_sku = ?, serial_number = ?, lpn = ?, location = ?, repair_state = ?, order_number = ?
            WHERE id = ?""",
-        (item_sku, serial_number, lpn, location, repair_state, item_id)
+        (item_sku, serial_number, lpn, location, repair_state, order_number, item_id)
     )
     conn.commit()
     affected = cursor.rowcount
@@ -228,12 +236,18 @@ def init_imported_inventory_db(project: str = "ecoflow"):
             repair_state TEXT NOT NULL,
             entered_by TEXT NOT NULL,
             created_at TEXT NOT NULL,
-            imported_at TEXT NOT NULL
+            imported_at TEXT NOT NULL,
+            order_number TEXT DEFAULT ''
         )
     """)
     # Add location column if it doesn't exist (for existing databases)
     try:
         cursor.execute("ALTER TABLE imported_inventory ADD COLUMN location TEXT DEFAULT ''")
+    except:
+        pass  # Column already exists
+    # Add order_number column if it doesn't exist (for existing databases)
+    try:
+        cursor.execute("ALTER TABLE imported_inventory ADD COLUMN order_number TEXT DEFAULT ''")
     except:
         pass  # Column already exists
     conn.commit()
@@ -263,10 +277,10 @@ def move_inventory_to_imported(project: str = "ecoflow") -> list[dict]:
     for item in items:
         imported_cursor.execute(
             """INSERT INTO imported_inventory
-               (item_sku, serial_number, lpn, location, repair_state, entered_by, created_at, imported_at)
-               VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+               (item_sku, serial_number, lpn, location, repair_state, entered_by, created_at, imported_at, order_number)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)""",
             (item['item_sku'], item['serial_number'], item['lpn'], item.get('location', ''),
-             item['repair_state'], item['entered_by'], item['created_at'], imported_at)
+             item['repair_state'], item['entered_by'], item['created_at'], imported_at, item.get('order_number', ''))
         )
 
     imported_conn.commit()
@@ -290,7 +304,7 @@ def get_all_imported_inventory(project: str = "ecoflow") -> list[dict]:
     conn = get_imported_connection(project)
     cursor = conn.cursor()
     cursor.execute("""
-        SELECT id, item_sku, serial_number, lpn, location, repair_state, entered_by, created_at, imported_at
+        SELECT id, item_sku, serial_number, lpn, location, repair_state, entered_by, created_at, imported_at, order_number
         FROM imported_inventory
         ORDER BY imported_at DESC, created_at DESC
     """)
@@ -307,7 +321,8 @@ def get_all_imported_inventory(project: str = "ecoflow") -> list[dict]:
             "repair_state": row[5],
             "entered_by": row[6],
             "created_at": row[7],
-            "imported_at": row[8]
+            "imported_at": row[8],
+            "order_number": row[9] or '' if len(row) > 9 else ''
         }
         for row in rows
     ]
@@ -372,7 +387,7 @@ def export_inventory_to_csv(items: list[dict], filepath: str, project: str = "ec
                         item.get('location', ''),   # Location
                         '82',                         # Client
                         '',                         # PO #
-                        '',                         # Order #
+                        item.get('order_number', ''),  # Order #
                         item['item_sku'],           # Item
                         rec_date,                   # Rec Date
                         '1',                        # Qty
