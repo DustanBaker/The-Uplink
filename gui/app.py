@@ -13,7 +13,8 @@ from database import (
     add_sku, add_skus_bulk, delete_sku, get_all_skus, search_skus, is_valid_sku, get_sku_count, clear_all_skus,
     move_inventory_to_imported, export_inventory_to_csv, get_all_imported_inventory
 )
-from utils import hash_password, get_gui_resource
+from utils import hash_password, get_gui_resource, check_for_updates, show_update_dialog
+from config import VERSION, GITHUB_REPO
 
 
 class MainApplication(ctk.CTk):
@@ -36,7 +37,7 @@ class MainApplication(ctk.CTk):
         self.admin_project_widgets = {}  # Store per-project widget references (admin panel)
         self.admin_sku_widgets = {}  # Store per-project SKU widget references (admin panel)
 
-        self.title("The-Uplink")
+        self.title(f"The-Uplink v{VERSION}")
         self.geometry("1200x650")
         self.minsize(900, 550)
        
@@ -57,6 +58,7 @@ class MainApplication(ctk.CTk):
 
         self._create_widgets()
         self._play_login_sound()
+        self._check_for_updates()
 
     def _play_sound(self, filename, volume=150):
         """Play a sound file in background thread with cross-platform support."""
@@ -152,6 +154,20 @@ Start-Sleep -Seconds 3
     def _play_login_sound(self):
         """Play the login sound once."""
         self._play_sound("arc_raiders.mp3")
+
+    def _check_for_updates(self):
+        """Check for application updates from GitHub releases."""
+        if not GITHUB_REPO or GITHUB_REPO == "YOUR_USERNAME/The-Uplink":
+            return  # Update checking not configured
+
+        def on_update_check(has_update, latest_version, download_url, release_notes):
+            if has_update:
+                # Schedule dialog to run on main thread
+                self.after(100, lambda: show_update_dialog(
+                    self, latest_version, download_url, release_notes
+                ))
+
+        check_for_updates(GITHUB_REPO, VERSION, on_update_check)
 
     def _play_success_sound(self):
         """Play the success/loot sound."""

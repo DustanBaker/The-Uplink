@@ -3,6 +3,13 @@
 import os
 from pathlib import Path
 
+# Application version (update this when releasing new versions)
+VERSION = "0.0.1"
+
+# GitHub repository for auto-updates (format: "owner/repo")
+# Set to None to disable update checking
+GITHUB_REPO = "DustanBaker/The-Uplink"  # TODO: Replace with your GitHub repo
+
 # Database path configuration
 # Priority: Environment variable > config file > default local path
 #
