@@ -25,7 +25,6 @@ def create_default_user():
 
 def run_app():
     """Run the application."""
-
     def on_login_success(user: dict):
     
         """Callback when login is successful."""
@@ -40,7 +39,8 @@ def main():
     """Main entry point."""
     # Initialize databases
     init_db()
-    init_inventory_db()
+    for project in ["ecoflow", "halo"]:
+        init_inventory_db(project)
 
     # Create default user if needed
     create_default_user()

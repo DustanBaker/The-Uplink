@@ -9,15 +9,15 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import get_db_path, DB_TIMEOUT, DB_RETRY_ATTEMPTS, DB_RETRY_DELAY
 
 
-def get_inventory_db_path() -> Path:
+def get_inventory_db_path(project: str = "ecoflow") -> Path:
     """Get the inventory database path (same directory as users.db)."""
     users_db = get_db_path()
-    return users_db.parent / "active_inventory.db"
+    return users_db.parent / f"{project}_active_inventory.db"
 
 
-def get_connection():
+def get_connection(project: str = "ecoflow"):
     """Get a connection to the inventory database with WAL mode enabled."""
-    db_path = get_inventory_db_path()
+    db_path = get_inventory_db_path(project)
 
     # Ensure parent directory exists
     db_path.parent.mkdir(parents=True, exist_ok=True)
@@ -56,9 +56,9 @@ def with_retry(func):
 
 
 @with_retry
-def init_inventory_db():
+def init_inventory_db(project: str = "ecoflow"):
     """Initialize the inventory database and create the table if it doesn't exist."""
-    conn = get_connection()
+    conn = get_connection(project)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS inventory (
@@ -83,12 +83,13 @@ def init_inventory_db():
 
 @with_retry
 def add_inventory_item(item_sku: str, serial_number: str, lpn: str,
-                       location: str, repair_state: str, entered_by: str) -> int:
+                       location: str, repair_state: str, entered_by: str,
+                       project: str = "ecoflow") -> int:
     """Add a new inventory item to the database.
 
     Returns the ID of the new item.
     """
-    conn = get_connection()
+    conn = get_connection(project)
     cursor = conn.cursor()
     cursor.execute(
         """INSERT INTO inventory
@@ -103,9 +104,9 @@ def add_inventory_item(item_sku: str, serial_number: str, lpn: str,
 
 
 @with_retry
-def get_all_inventory() -> list[dict]:
+def get_all_inventory(project: str = "ecoflow") -> list[dict]:
     """Get all inventory items from the database."""
-    conn = get_connection()
+    conn = get_connection(project)
     cursor = conn.cursor()
     cursor.execute("""
         SELECT id, item_sku, serial_number, lpn, location, repair_state, entered_by, created_at
@@ -131,9 +132,9 @@ def get_all_inventory() -> list[dict]:
 
 
 @with_retry
-def get_inventory_by_user(username: str) -> list[dict]:
+def get_inventory_by_user(username: str, project: str = "ecoflow") -> list[dict]:
     """Get all inventory items entered by a specific user."""
-    conn = get_connection()
+    conn = get_connection(project)
     cursor = conn.cursor()
     cursor.execute("""
         SELECT id, item_sku, serial_number, lpn, location, repair_state, entered_by, created_at
@@ -161,12 +162,13 @@ def get_inventory_by_user(username: str) -> list[dict]:
 
 @with_retry
 def update_inventory_item(item_id: int, item_sku: str, serial_number: str,
-                          lpn: str, location: str, repair_state: str) -> bool:
+                          lpn: str, location: str, repair_state: str,
+                          project: str = "ecoflow") -> bool:
     """Update an existing inventory item.
 
     Returns True if successful, False if item not found.
     """
-    conn = get_connection()
+    conn = get_connection(project)
     cursor = conn.cursor()
     cursor.execute(
         """UPDATE inventory
@@ -181,12 +183,12 @@ def update_inventory_item(item_id: int, item_sku: str, serial_number: str,
 
 
 @with_retry
-def delete_inventory_item(item_id: int) -> bool:
+def delete_inventory_item(item_id: int, project: str = "ecoflow") -> bool:
     """Delete an inventory item.
 
     Returns True if successful, False if item not found.
     """
-    conn = get_connection()
+    conn = get_connection(project)
     cursor = conn.cursor()
     cursor.execute("DELETE FROM inventory WHERE id = ?", (item_id,))
     conn.commit()
@@ -195,15 +197,15 @@ def delete_inventory_item(item_id: int) -> bool:
     return affected > 0
 
 
-def get_imported_inventory_db_path() -> Path:
+def get_imported_inventory_db_path(project: str = "ecoflow") -> Path:
     """Get the imported inventory database path."""
     users_db = get_db_path()
-    return users_db.parent / "imported_inventory.db"
+    return users_db.parent / f"{project}_imported_inventory.db"
 
 
-def get_imported_connection():
+def get_imported_connection(project: str = "ecoflow"):
     """Get a connection to the imported inventory database."""
-    db_path = get_imported_inventory_db_path()
+    db_path = get_imported_inventory_db_path(project)
     db_path.parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=DB_TIMEOUT)
     conn.execute("PRAGMA journal_mode=WAL")
@@ -212,9 +214,9 @@ def get_imported_connection():
 
 
 @with_retry
-def init_imported_inventory_db():
+def init_imported_inventory_db(project: str = "ecoflow"):
     """Initialize the imported inventory database."""
-    conn = get_imported_connection()
+    conn = get_imported_connection(project)
     cursor = conn.cursor()
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS imported_inventory (
@@ -239,22 +241,22 @@ def init_imported_inventory_db():
 
 
 @with_retry
-def move_inventory_to_imported() -> list[dict]:
+def move_inventory_to_imported(project: str = "ecoflow") -> list[dict]:
     """Move all items from active inventory to imported inventory.
 
     Returns the list of moved items for CSV export.
     """
     # Initialize imported db if needed
-    init_imported_inventory_db()
+    init_imported_inventory_db(project)
 
     # Get all active inventory items
-    items = get_all_inventory()
+    items = get_all_inventory(project)
 
     if not items:
         return []
 
     # Insert into imported inventory
-    imported_conn = get_imported_connection()
+    imported_conn = get_imported_connection(project)
     imported_cursor = imported_conn.cursor()
     imported_at = datetime.now().isoformat()
 
@@ -271,7 +273,7 @@ def move_inventory_to_imported() -> list[dict]:
     imported_conn.close()
 
     # Clear active inventory
-    active_conn = get_connection()
+    active_conn = get_connection(project)
     active_cursor = active_conn.cursor()
     active_cursor.execute("DELETE FROM inventory")
     active_conn.commit()
@@ -281,11 +283,11 @@ def move_inventory_to_imported() -> list[dict]:
 
 
 @with_retry
-def get_all_imported_inventory() -> list[dict]:
+def get_all_imported_inventory(project: str = "ecoflow") -> list[dict]:
     """Get all items from the imported inventory database."""
-    init_imported_inventory_db()
+    init_imported_inventory_db(project)
 
-    conn = get_imported_connection()
+    conn = get_imported_connection(project)
     cursor = conn.cursor()
     cursor.execute("""
         SELECT id, item_sku, serial_number, lpn, location, repair_state, entered_by, created_at, imported_at
@@ -311,8 +313,8 @@ def get_all_imported_inventory() -> list[dict]:
     ]
 
 
-def export_inventory_to_csv(items: list[dict], filepath: str) -> bool:
-    """Export inventory items to CSV with EcoFlow format.
+def export_inventory_to_csv(items: list[dict], filepath: str, project: str = "ecoflow") -> bool:
+    """Export inventory items to CSV with project-specific format.
 
     Returns True if successful.
     """
@@ -322,37 +324,68 @@ def export_inventory_to_csv(items: list[dict], filepath: str) -> bool:
         with open(filepath, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
 
-            # Row 1: Column numbers
-            writer.writerow(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18'])
+            if project == "halo":
+                # Halo format - 16 columns
+                writer.writerow(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16'])
+                writer.writerow(['SN', 'LPN', 'Location', 'Client', 'PONo', 'Client Order', 'SKU', 'Asset', 'RecDate', 'Qty', 'Qty Free', 'WO #', 'Repair State', 'Grade', 'Shippable', 'RMA #'])
 
-            # Row 2: Column headers
-            writer.writerow(['SN', 'LPN', 'Location', 'Client', 'PO #', 'Order #', 'Item', 'Rec Date', 'Qty', 'Qty Free', 'Shippable', 'Repair State', 'Firmware', 'Program', 'Warranty', 'Consigned', 'PartType', 'Grade'])
+                for item in items:
+                    created = item['created_at']
+                    if 'T' in created:
+                        rec_date = created.replace('T', ' ').split('.')[0]
+                    else:
+                        rec_date = created[:19]
 
-            # Data rows
-            for item in items:
-                # Format the date
-                rec_date = item['created_at'].split('T')[0] if 'T' in item['created_at'] else item['created_at'][:10]
+                    writer.writerow([
+                        item['serial_number'],      # SN
+                        item['lpn'],                # LPN
+                        item.get('location', ''),   # Location
+                        '57',                         # Client
+                        '',                         # PONo
+                        '',                         # Client Order
+                        item['item_sku'],           # SKU
+                        '',                         # Asset
+                        rec_date,                   # RecDate
+                        '1',                        # Qty
+                        '1',                        # Qty Free
+                        '',                         # WO #
+                        item['repair_state'],       # Repair State
+                        '',                         # Grade
+                        '',                         # Shippable
+                        ''                          # RMA #
+                    ])
+            else:
+                # EcoFlow format - 18 columns
+                writer.writerow(['1', '2', '3', '4', '5', '6', '7', '8', '9', '10', '11', '12', '13', '14', '15', '16', '17', '18'])
+                writer.writerow(['SN', 'LPN', 'Location', 'Client', 'PO #', 'Order #', 'Item', 'Rec Date', 'Qty', 'Qty Free', 'Shippable', 'Repair State', 'Firmware', 'Program', 'Warranty', 'Consigned', 'PartType', 'Grade'])
 
-                writer.writerow([
-                    item['serial_number'],      # SN
-                    item['lpn'],                # LPN
-                    item.get('location', ''),   # Location
-                    '',                         # Client
-                    '',                         # PO #
-                    '',                         # Order #
-                    item['item_sku'],           # Item
-                    rec_date,                   # Rec Date
-                    '1',                        # Qty
-                    '1',                        # Qty Free
-                    '',                         # Shippable
-                    item['repair_state'],       # Repair State
-                    '',                         # Firmware
-                    '',                         # Program
-                    '',                         # Warranty
-                    '',                         # Consigned
-                    '',                         # PartType
-                    ''                          # Grade
-                ])
+                for item in items:
+                    created = item['created_at']
+                    if 'T' in created:
+                        rec_date = created.replace('T', ' ').split('.')[0]
+                    else:
+                        rec_date = created[:19]
+
+                    writer.writerow([
+                        item['serial_number'],      # SN
+                        item['lpn'],                # LPN
+                        item.get('location', ''),   # Location
+                        '82',                         # Client
+                        '',                         # PO #
+                        '',                         # Order #
+                        item['item_sku'],           # Item
+                        rec_date,                   # Rec Date
+                        '1',                        # Qty
+                        '1',                        # Qty Free
+                        '',                         # Shippable
+                        item['repair_state'],       # Repair State
+                        '',                         # Firmware
+                        '',                         # Program
+                        '',                         # Warranty
+                        '',                         # Consigned
+                        '',                         # PartType
+                        ''                          # Grade
+                    ])
 
         return True
     except Exception:

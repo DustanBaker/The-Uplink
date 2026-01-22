@@ -3,7 +3,7 @@ from tkinter import filedialog
 from PIL import Image, ImageTk
 import os
 import csv
-from datetime import date
+from datetime import datetime
 import subprocess
 import threading
 import platform
@@ -32,6 +32,8 @@ class MainApplication(ctk.CTk):
         self.user = user
         self.on_logout = on_logout
         self._refresh_poll_id = None  # Track polling timer
+        self.project_widgets = {}  # Store per-project widget references (user panel)
+        self.admin_project_widgets = {}  # Store per-project widget references (admin panel)
 
         self.title("The-Uplink")
         self.geometry("1200x650")
@@ -203,7 +205,26 @@ Start-Sleep -Seconds 3
             self._create_user_panel(content_frame)
 
     def _create_user_panel(self, parent):
-        """Create the standard user panel with data entry fields."""
+        """Create the standard user panel with tabbed interface for EcoFlow and Halo."""
+        # Create tabview for projects
+        tabview = ctk.CTkTabview(parent)
+        tabview.pack(expand=True, fill="both", padx=10, pady=10)
+
+        # Add tabs for each project
+        tabview.add("EcoFlow")
+        tabview.add("Halo")
+
+        # Create content for each tab
+        self._create_project_tab(tabview.tab("EcoFlow"), "ecoflow")
+        self._create_project_tab(tabview.tab("Halo"), "halo")
+
+        self._start_inventory_polling()
+
+    def _create_project_tab(self, parent, project: str):
+        """Create the project-specific tab content with form and inventory list."""
+        # Initialize widget storage for this project
+        self.project_widgets[project] = {}
+
         # Configure parent for vertical layout
         parent.grid_columnconfigure(0, weight=1)
         parent.grid_rowconfigure(1, weight=1)
@@ -228,43 +249,47 @@ Start-Sleep -Seconds 3
         sku_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
         sku_frame.pack(side="left", padx=(0, 15))
         ctk.CTkLabel(sku_frame, text="Item SKU", font=ctk.CTkFont(size=14)).pack(anchor="w")
-        self.sku_entry = ctk.CTkEntry(sku_frame, width=180, font=ctk.CTkFont(size=14))
-        self.sku_entry.pack()
-        self.sku_entry.bind("<KeyRelease>", self._on_sku_keyrelease)
-        self.sku_entry.bind("<FocusOut>", self._hide_sku_suggestions)
-
-        # Autocomplete dropdown (hidden by default)
-        self.sku_suggestions_frame = None
+        sku_entry = ctk.CTkEntry(sku_frame, width=180, font=ctk.CTkFont(size=14))
+        sku_entry.pack()
+        sku_entry.bind("<KeyRelease>", lambda e, p=project: self._on_sku_keyrelease(e, p))
+        sku_entry.bind("<FocusOut>", lambda e, p=project: self._hide_sku_suggestions(e, p))
+        self.project_widgets[project]['sku_entry'] = sku_entry
+        self.project_widgets[project]['sku_suggestions_frame'] = None
 
         # Serial Number
         serial_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
         serial_frame.pack(side="left", padx=(0, 15))
         ctk.CTkLabel(serial_frame, text="Serial Number", font=ctk.CTkFont(size=14)).pack(anchor="w")
-        self.serial_entry = ctk.CTkEntry(serial_frame, width=180, font=ctk.CTkFont(size=14))
-        self.serial_entry.pack()
+        serial_entry = ctk.CTkEntry(serial_frame, width=180, font=ctk.CTkFont(size=14))
+        serial_entry.pack()
+        self.project_widgets[project]['serial_entry'] = serial_entry
 
         # LPN
         lpn_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
         lpn_frame.pack(side="left", padx=(0, 15))
         ctk.CTkLabel(lpn_frame, text="LPN", font=ctk.CTkFont(size=14)).pack(anchor="w")
-        self.lpn_entry = ctk.CTkEntry(lpn_frame, width=150, font=ctk.CTkFont(size=14))
-        self.lpn_entry.pack()
+        lpn_entry = ctk.CTkEntry(lpn_frame, width=150, font=ctk.CTkFont(size=14))
+        lpn_entry.pack()
+        self.project_widgets[project]['lpn_entry'] = lpn_entry
 
         # Location
         location_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
         location_frame.pack(side="left", padx=(0, 15))
         ctk.CTkLabel(location_frame, text="Location", font=ctk.CTkFont(size=14)).pack(anchor="w")
-        self.location_entry = ctk.CTkEntry(location_frame, width=120, font=ctk.CTkFont(size=14))
-        self.location_entry.pack()
+        location_entry = ctk.CTkEntry(location_frame, width=120, font=ctk.CTkFont(size=14))
+        location_entry.pack()
+        self.project_widgets[project]['location_entry'] = location_entry
 
         # Repair State
         repair_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
         repair_frame.pack(side="left", padx=(0, 15))
         ctk.CTkLabel(repair_frame, text="Repair State", font=ctk.CTkFont(size=14)).pack(anchor="w")
-        self.repair_options = ["Temporary Storage","To be repaired", "To be refurbished","To be Scrapped","Storage only","Good Spare Parts","Refurbished","Repaired"]
-        self.repair_dropdown = ctk.CTkOptionMenu(repair_frame, width=170, values=self.repair_options, font=ctk.CTkFont(size=14))
-        self.repair_dropdown.set(self.repair_options[0])
-        self.repair_dropdown.pack()
+        repair_options = ["Temporary Storage","To be repaired", "To be refurbished","To be Scrapped","Storage only","Good Spare Parts","Refurbished","Repaired"]
+        repair_dropdown = ctk.CTkOptionMenu(repair_frame, width=170, values=repair_options, font=ctk.CTkFont(size=14))
+        repair_dropdown.set(repair_options[0])
+        repair_dropdown.pack()
+        self.project_widgets[project]['repair_dropdown'] = repair_dropdown
+        self.project_widgets[project]['repair_options'] = repair_options
 
         # Submit button and status
         submit_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
@@ -275,13 +300,14 @@ Start-Sleep -Seconds 3
             text="Submit",
             width=100,
             font=ctk.CTkFont(size=14),
-            command=self._handle_submit_entry
+            command=lambda p=project: self._handle_submit_entry(p)
         )
         submit_button.pack()
 
         # Status message
-        self.user_status_label = ctk.CTkLabel(form_frame, text="", height=20, font=ctk.CTkFont(size=14))
-        self.user_status_label.pack(pady=(0, 10))
+        status_label = ctk.CTkLabel(form_frame, text="", height=20, font=ctk.CTkFont(size=14))
+        status_label.pack(pady=(0, 10))
+        self.project_widgets[project]['status_label'] = status_label
 
         # Bottom section - Inventory list
         list_frame = ctk.CTkFrame(parent)
@@ -305,32 +331,33 @@ Start-Sleep -Seconds 3
             font=ctk.CTkFont(size=14),
             fg_color="#28a745",
             hover_color="#218838",
-            command=self._handle_export_inventory
+            command=lambda p=project: self._handle_export_inventory(p)
         )
         export_button.pack(side="right")
 
         # Scrollable frame for inventory list
-        self.inventory_list_frame = ctk.CTkScrollableFrame(list_frame)
-        self.inventory_list_frame.pack(expand=True, fill="both", padx=10, pady=(0, 10))
+        inventory_list_frame = ctk.CTkScrollableFrame(list_frame)
+        inventory_list_frame.pack(expand=True, fill="both", padx=10, pady=(0, 10))
+        self.project_widgets[project]['inventory_list_frame'] = inventory_list_frame
 
         # Configure columns
-        self.inventory_list_frame.grid_columnconfigure(0, weight=1)
-        self.inventory_list_frame.grid_columnconfigure(1, weight=1)
-        self.inventory_list_frame.grid_columnconfigure(2, weight=1)
-        self.inventory_list_frame.grid_columnconfigure(3, weight=1)
-        self.inventory_list_frame.grid_columnconfigure(4, weight=1)
-        self.inventory_list_frame.grid_columnconfigure(5, weight=1)
+        inventory_list_frame.grid_columnconfigure(0, weight=1)
+        inventory_list_frame.grid_columnconfigure(1, weight=1)
+        inventory_list_frame.grid_columnconfigure(2, weight=1)
+        inventory_list_frame.grid_columnconfigure(3, weight=1)
+        inventory_list_frame.grid_columnconfigure(4, weight=1)
+        inventory_list_frame.grid_columnconfigure(5, weight=1)
 
-        self._refresh_inventory_list()
-        self._start_inventory_polling()
+        self._refresh_inventory_list(project)
 
     def _start_inventory_polling(self):
         """Start polling to refresh inventory every 10 seconds."""
         self._refresh_poll_id = self.after(10000, self._poll_inventory)
 
     def _poll_inventory(self):
-        """Poll and refresh inventory, then schedule next poll."""
-        self._refresh_inventory_list()
+        """Poll and refresh inventory for all projects, then schedule next poll."""
+        for project in self.project_widgets:
+            self._refresh_inventory_list(project)
         self._refresh_poll_id = self.after(10000, self._poll_inventory)
 
     def _stop_inventory_polling(self):
@@ -339,67 +366,69 @@ Start-Sleep -Seconds 3
             self.after_cancel(self._refresh_poll_id)
             self._refresh_poll_id = None
 
-    def _refresh_inventory_list(self):
-        """Refresh the inventory list display."""
+    def _refresh_inventory_list(self, project: str = "ecoflow"):
+        """Refresh the inventory list display for a specific project."""
+        inventory_list_frame = self.project_widgets[project]['inventory_list_frame']
+
         # Clear existing widgets
-        for widget in self.inventory_list_frame.winfo_children():
+        for widget in inventory_list_frame.winfo_children():
             widget.destroy()
 
         # Header row
         headers = ["SKU", "Serial Number", "LPN", "Location", "Repair State", "Entered By", "Date", "", ""]
         for col, header in enumerate(headers):
             label = ctk.CTkLabel(
-                self.inventory_list_frame,
+                inventory_list_frame,
                 text=header,
                 font=ctk.CTkFont(size=14, weight="bold")
             )
             label.grid(row=0, column=col, padx=5, pady=(0, 10), sticky="w")
 
         # Inventory rows
-        items = get_all_inventory()
+        items = get_all_inventory(project)
         for row, item in enumerate(items, start=1):
-            ctk.CTkLabel(self.inventory_list_frame, text=item['item_sku'], font=ctk.CTkFont(size=14)).grid(
+            ctk.CTkLabel(inventory_list_frame, text=item['item_sku'], font=ctk.CTkFont(size=14)).grid(
                 row=row, column=0, padx=5, pady=3, sticky="w")
-            ctk.CTkLabel(self.inventory_list_frame, text=item['serial_number'], font=ctk.CTkFont(size=14)).grid(
+            ctk.CTkLabel(inventory_list_frame, text=item['serial_number'], font=ctk.CTkFont(size=14)).grid(
                 row=row, column=1, padx=5, pady=3, sticky="w")
-            ctk.CTkLabel(self.inventory_list_frame, text=item['lpn'], font=ctk.CTkFont(size=14)).grid(
+            ctk.CTkLabel(inventory_list_frame, text=item['lpn'], font=ctk.CTkFont(size=14)).grid(
                 row=row, column=2, padx=5, pady=3, sticky="w")
-            ctk.CTkLabel(self.inventory_list_frame, text=item.get('location', ''), font=ctk.CTkFont(size=14)).grid(
+            ctk.CTkLabel(inventory_list_frame, text=item.get('location', ''), font=ctk.CTkFont(size=14)).grid(
                 row=row, column=3, padx=5, pady=3, sticky="w")
-            ctk.CTkLabel(self.inventory_list_frame, text=item['repair_state'], font=ctk.CTkFont(size=14)).grid(
+            ctk.CTkLabel(inventory_list_frame, text=item['repair_state'], font=ctk.CTkFont(size=14)).grid(
                 row=row, column=4, padx=5, pady=3, sticky="w")
-            ctk.CTkLabel(self.inventory_list_frame, text=item['entered_by'], font=ctk.CTkFont(size=14)).grid(
+            ctk.CTkLabel(inventory_list_frame, text=item['entered_by'], font=ctk.CTkFont(size=14)).grid(
                 row=row, column=5, padx=5, pady=3, sticky="w")
             # Format date
-            date_str = item['created_at'].split('T')[0] if 'T' in item['created_at'] else item['created_at'][:10]
-            ctk.CTkLabel(self.inventory_list_frame, text=date_str, font=ctk.CTkFont(size=14)).grid(
+            date_str = item['created_at'].replace('T', ' ')[:16] if 'T' in item['created_at'] else item['created_at'][:16]
+            ctk.CTkLabel(inventory_list_frame, text=date_str, font=ctk.CTkFont(size=14)).grid(
                 row=row, column=6, padx=5, pady=3, sticky="w")
 
             # Edit button
             edit_btn = ctk.CTkButton(
-                self.inventory_list_frame,
+                inventory_list_frame,
                 text="Edit",
                 width=70,
                 height=28,
                 font=ctk.CTkFont(size=13),
-                command=lambda i=item: self._show_edit_inventory_dialog(i)
+                command=lambda i=item, p=project: self._show_edit_inventory_dialog(i, p)
             )
             edit_btn.grid(row=row, column=7, padx=2, pady=3)
 
             # Delete button
             delete_btn = ctk.CTkButton(
-                self.inventory_list_frame,
+                inventory_list_frame,
                 text="Delete",
                 width=70,
                 height=28,
                 font=ctk.CTkFont(size=13),
                 fg_color="#dc3545",
                 hover_color="#c82333",
-                command=lambda i=item: self._delete_inventory_item(i)
+                command=lambda i=item, p=project: self._delete_inventory_item(i, p)
             )
             delete_btn.grid(row=row, column=8, padx=2, pady=3)
 
-    def _show_edit_inventory_dialog(self, item: dict):
+    def _show_edit_inventory_dialog(self, item: dict, project: str = "ecoflow"):
         """Show dialog to edit an inventory item."""
         dialog = ctk.CTkToplevel(self)
         dialog.title(f"Edit Item - {item['item_sku']}")
@@ -473,10 +502,10 @@ Start-Sleep -Seconds 3
                 self._play_error_sound()
                 return
 
-            if update_inventory_item(item['id'], sku, serial, lpn, repair_state):
+            if update_inventory_item(item['id'], sku, serial, lpn, item.get('location', ''), repair_state, project):
                 dialog.destroy()
-                self._refresh_inventory_list()
-                self._show_user_status("Item updated successfully", error=False)
+                self._refresh_inventory_list(project)
+                self._show_user_status("Item updated successfully", project, error=False)
             else:
                 status_label.configure(text="Failed to update item")
                 self._play_error_sound()
@@ -504,7 +533,7 @@ Start-Sleep -Seconds 3
         )
         save_btn.pack(side="right")
 
-    def _delete_inventory_item(self, item: dict):
+    def _delete_inventory_item(self, item: dict, project: str = "ecoflow"):
         """Delete an inventory item with confirmation."""
         dialog = ctk.CTkToplevel(self)
         dialog.title("Confirm Delete")
@@ -532,13 +561,13 @@ Start-Sleep -Seconds 3
         label.pack(pady=(0, 20))
 
         def do_delete():
-            if delete_inventory_item(item['id']):
+            if delete_inventory_item(item['id'], project):
                 dialog.destroy()
-                self._refresh_inventory_list()
-                self._show_user_status("Item deleted", error=False)
+                self._refresh_inventory_list(project)
+                self._show_user_status("Item deleted", project, error=False)
             else:
                 dialog.destroy()
-                self._show_user_status("Failed to delete item", error=True)
+                self._show_user_status("Failed to delete item", project, error=True)
 
         button_frame = ctk.CTkFrame(frame, fg_color="transparent")
         button_frame.pack(fill="x")
@@ -564,44 +593,48 @@ Start-Sleep -Seconds 3
         )
         delete_btn.pack(side="right")
 
-    def _on_sku_keyrelease(self, event):
+    def _on_sku_keyrelease(self, event, project: str = "ecoflow"):
         """Handle key release in SKU entry for autocomplete."""
         # Ignore navigation keys
         if event.keysym in ('Up', 'Down', 'Left', 'Right', 'Return', 'Tab', 'Escape'):
             if event.keysym == 'Escape':
-                self._hide_sku_suggestions(None)
+                self._hide_sku_suggestions(None, project)
             return
 
-        text = self.sku_entry.get().strip()
+        sku_entry = self.project_widgets[project]['sku_entry']
+        text = sku_entry.get().strip()
 
         if len(text) < 1:
-            self._hide_sku_suggestions(None)
+            self._hide_sku_suggestions(None, project)
             return
 
         # Get matching SKUs
         matches = search_skus(text, limit=8)
 
         if matches:
-            self._show_sku_suggestions(matches)
+            self._show_sku_suggestions(matches, project)
         else:
-            self._hide_sku_suggestions(None)
+            self._hide_sku_suggestions(None, project)
 
-    def _show_sku_suggestions(self, matches):
+    def _show_sku_suggestions(self, matches, project: str = "ecoflow"):
         """Show autocomplete suggestions dropdown."""
         # Remove existing suggestions
-        self._hide_sku_suggestions(None)
+        self._hide_sku_suggestions(None, project)
+
+        sku_entry = self.project_widgets[project]['sku_entry']
 
         # Create suggestions frame as a toplevel to float above
-        self.sku_suggestions_frame = ctk.CTkToplevel(self)
-        self.sku_suggestions_frame.withdraw()  # Hide initially
-        self.sku_suggestions_frame.overrideredirect(True)  # No window decorations
+        suggestions_frame = ctk.CTkToplevel(self)
+        suggestions_frame.withdraw()  # Hide initially
+        suggestions_frame.overrideredirect(True)  # No window decorations
+        self.project_widgets[project]['sku_suggestions_frame'] = suggestions_frame
 
         # Position below the entry
-        entry_x = self.sku_entry.winfo_rootx()
-        entry_y = self.sku_entry.winfo_rooty() + self.sku_entry.winfo_height()
+        entry_x = sku_entry.winfo_rootx()
+        entry_y = sku_entry.winfo_rooty() + sku_entry.winfo_height()
 
         # Create scrollable frame for suggestions
-        suggestions_container = ctk.CTkFrame(self.sku_suggestions_frame)
+        suggestions_container = ctk.CTkFrame(suggestions_frame)
         suggestions_container.pack(fill="both", expand=True)
 
         for match in matches:
@@ -614,58 +647,61 @@ Start-Sleep -Seconds 3
                 fg_color="transparent",
                 text_color=("gray10", "gray90"),
                 hover_color=("gray70", "gray30"),
-                command=lambda s=match['sku']: self._select_sku_suggestion(s)
+                command=lambda s=match['sku'], p=project: self._select_sku_suggestion(s, p)
             )
             btn.pack(fill="x", padx=2, pady=1)
 
         # Show and position
-        self.sku_suggestions_frame.geometry(f"180x{min(len(matches) * 32, 250)}+{entry_x}+{entry_y}")
-        self.sku_suggestions_frame.deiconify()
-        self.sku_suggestions_frame.lift()
+        suggestions_frame.geometry(f"180x{min(len(matches) * 32, 250)}+{entry_x}+{entry_y}")
+        suggestions_frame.deiconify()
+        suggestions_frame.lift()
 
-    def _hide_sku_suggestions(self, event):
+    def _hide_sku_suggestions(self, event, project: str = "ecoflow"):
         """Hide the autocomplete suggestions."""
-        if self.sku_suggestions_frame:
-            self.sku_suggestions_frame.destroy()
-            self.sku_suggestions_frame = None
+        if project in self.project_widgets and self.project_widgets[project]['sku_suggestions_frame']:
+            self.project_widgets[project]['sku_suggestions_frame'].destroy()
+            self.project_widgets[project]['sku_suggestions_frame'] = None
 
-    def _select_sku_suggestion(self, sku):
+    def _select_sku_suggestion(self, sku, project: str = "ecoflow"):
         """Select a SKU from suggestions."""
-        self.sku_entry.delete(0, 'end')
-        self.sku_entry.insert(0, sku)
-        self._hide_sku_suggestions(None)
+        sku_entry = self.project_widgets[project]['sku_entry']
+        serial_entry = self.project_widgets[project]['serial_entry']
+        sku_entry.delete(0, 'end')
+        sku_entry.insert(0, sku)
+        self._hide_sku_suggestions(None, project)
         # Move focus to next field
-        self.serial_entry.focus()
+        serial_entry.focus()
 
-    def _handle_submit_entry(self):
+    def _handle_submit_entry(self, project: str = "ecoflow"):
         """Handle submit button click for item entry."""
-        sku = self.sku_entry.get().strip()
-        serial = self.serial_entry.get().strip()
-        lpn = self.lpn_entry.get().strip()
-        location = self.location_entry.get().strip()
-        repair_state = self.repair_dropdown.get()
+        widgets = self.project_widgets[project]
+        sku = widgets['sku_entry'].get().strip()
+        serial = widgets['serial_entry'].get().strip()
+        lpn = widgets['lpn_entry'].get().strip()
+        location = widgets['location_entry'].get().strip()
+        repair_state = widgets['repair_dropdown'].get()
 
         # Basic validation
         if not sku:
-            self._show_user_status("Item SKU is required", error=True)
+            self._show_user_status("Item SKU is required", project, error=True)
             return
 
         # Validate SKU against approved list
         if not is_valid_sku(sku):
-            self._show_user_status(f"Invalid SKU: '{sku}' not in approved list", error=True)
+            self._show_user_status(f"Invalid SKU: '{sku}' not in approved list", project, error=True)
             return
 
         if not serial:
-            self._show_user_status("Serial Number is required", error=True)
+            self._show_user_status("Serial Number is required", project, error=True)
             return
 
         if not lpn:
-            self._show_user_status("LPN is required", error=True)
+            self._show_user_status("LPN is required", project, error=True)
             return
 
         # Validate LPN: must be exactly 11 digits
         if not lpn.isdigit() or len(lpn) != 11:
-            self._show_user_status("LPN must be exactly 11 digits (numbers only)", error=True)
+            self._show_user_status("LPN must be exactly 11 digits (numbers only)", project, error=True)
             return
 
         # Save to inventory database
@@ -676,45 +712,47 @@ Start-Sleep -Seconds 3
                 lpn=lpn,
                 location=location,
                 repair_state=repair_state,
-                entered_by=self.user['username']
+                entered_by=self.user['username'],
+                project=project
             )
-            self._show_user_status("Entry submitted successfully", error=False)
+            self._show_user_status("Entry submitted successfully", project, error=False)
             self._play_success_sound()
         except Exception as e:
-            self._show_user_status(f"Failed to save: {str(e)}", error=True)
+            self._show_user_status(f"Failed to save: {str(e)}", project, error=True)
             return
 
         # Clear form
-        self.sku_entry.delete(0, 'end')
-        self.serial_entry.delete(0, 'end')
-        self.lpn_entry.delete(0, 'end')
-        self.location_entry.delete(0, 'end')
-        self.repair_dropdown.set(self.repair_options[0])
+        widgets['sku_entry'].delete(0, 'end')
+        widgets['serial_entry'].delete(0, 'end')
+        widgets['lpn_entry'].delete(0, 'end')
+        widgets['location_entry'].delete(0, 'end')
+        widgets['repair_dropdown'].set(widgets['repair_options'][0])
 
         # Refresh inventory list
-        self._refresh_inventory_list()
+        self._refresh_inventory_list(project)
 
         # Focus back to first field
-        self.sku_entry.focus()
+        widgets['sku_entry'].focus()
 
-    def _show_user_status(self, message: str, error: bool = False):
+    def _show_user_status(self, message: str, project: str = "ecoflow", error: bool = False):
         """Display a status message for user panel."""
         color = "red" if error else "green"
-        self.user_status_label.configure(text=message, text_color=color)
+        self.project_widgets[project]['status_label'].configure(text=message, text_color=color)
         if error:
             self._play_error_sound()
 
-    def _handle_export_inventory(self):
+    def _handle_export_inventory(self, project: str = "ecoflow"):
         """Handle export and archive of inventory."""
-        items = get_all_inventory()
+        items = get_all_inventory(project)
 
         if not items:
-            self._show_user_status("No inventory items to export", error=True)
+            self._show_user_status("No inventory items to export", project, error=True)
             return
 
-        # Generate filename with today's date
-        today = date.today().strftime("%Y-%m-%d")
-        default_filename = f"EcoFlow stock import({today}).csv"
+        # Generate filename with today's date and time
+        now = datetime.now().strftime("%Y-%m-%d %H-%M-%S")
+        project_name = project.capitalize()
+        default_filename = f"{project_name} stock import({now}).csv"
         default_dir = r"T:\3PL Files\Stock Import"
 
         # Ask user where to save the file
@@ -730,14 +768,14 @@ Start-Sleep -Seconds 3
             return  # User cancelled
 
         # Move items to imported inventory and export CSV
-        moved_items = move_inventory_to_imported()
+        moved_items = move_inventory_to_imported(project)
 
-        if export_inventory_to_csv(moved_items, filepath):
-            self._show_user_status(f"Exported {len(moved_items)} items and archived", error=False)
-            self._refresh_inventory_list()
+        if export_inventory_to_csv(moved_items, filepath, project):
+            self._show_user_status(f"Exported {len(moved_items)} items and archived", project, error=False)
+            self._refresh_inventory_list(project)
             self._play_success_sound()
         else:
-            self._show_user_status("Failed to export CSV", error=True)
+            self._show_user_status("Failed to export CSV", project, error=True)
 
     def _create_admin_panel(self, parent):
         """Create the admin panel with tabbed interface for Users, SKUs, and Inventory."""
@@ -953,7 +991,23 @@ Start-Sleep -Seconds 3
         self._refresh_sku_list()
 
     def _create_inventory_tab(self, parent):
-        """Create the inventory viewing tab for admin."""
+        """Create the inventory viewing tab for admin with project tabs."""
+        # Create project tabview (EcoFlow / Halo)
+        project_tabview = ctk.CTkTabview(parent)
+        project_tabview.pack(expand=True, fill="both", padx=5, pady=5)
+
+        project_tabview.add("EcoFlow")
+        project_tabview.add("Halo")
+
+        # Create inventory views for each project
+        self._create_admin_project_inventory(project_tabview.tab("EcoFlow"), "ecoflow")
+        self._create_admin_project_inventory(project_tabview.tab("Halo"), "halo")
+
+    def _create_admin_project_inventory(self, parent, project: str):
+        """Create the inventory sub-tabs (Active/Archived) for a specific project."""
+        # Initialize widget storage for this project
+        self.admin_project_widgets[project] = {}
+
         # Create sub-tabview for Active and Archived
         inventory_tabview = ctk.CTkTabview(parent)
         inventory_tabview.pack(expand=True, fill="both", padx=5, pady=5)
@@ -962,13 +1016,13 @@ Start-Sleep -Seconds 3
         inventory_tabview.add("Archived Inventory")
 
         # Active inventory section
-        self._create_active_inventory_view(inventory_tabview.tab("Active Inventory"))
+        self._create_active_inventory_view(inventory_tabview.tab("Active Inventory"), project)
 
         # Archived inventory section
-        self._create_archived_inventory_view(inventory_tabview.tab("Archived Inventory"))
+        self._create_archived_inventory_view(inventory_tabview.tab("Archived Inventory"), project)
 
-    def _create_active_inventory_view(self, parent):
-        """Create the active inventory view."""
+    def _create_active_inventory_view(self, parent, project: str = "ecoflow"):
+        """Create the active inventory view for a specific project."""
         # Header with refresh button
         header_frame = ctk.CTkFrame(parent, fg_color="transparent")
         header_frame.pack(fill="x", padx=10, pady=(10, 5))
@@ -985,7 +1039,7 @@ Start-Sleep -Seconds 3
             text="Refresh",
             width=100,
             font=ctk.CTkFont(size=14),
-            command=self._refresh_admin_active_inventory
+            command=lambda p=project: self._refresh_admin_active_inventory(p)
         )
         refresh_btn.pack(side="right", padx=(5, 0))
 
@@ -996,22 +1050,23 @@ Start-Sleep -Seconds 3
             font=ctk.CTkFont(size=14),
             fg_color="#28a745",
             hover_color="#218838",
-            command=self._handle_admin_export_inventory
+            command=lambda p=project: self._handle_admin_export_inventory(p)
         )
         export_btn.pack(side="right")
 
         # Scrollable frame for inventory list
-        self.admin_active_inventory_frame = ctk.CTkScrollableFrame(parent)
-        self.admin_active_inventory_frame.pack(expand=True, fill="both", padx=10, pady=(0, 10))
+        admin_active_inventory_frame = ctk.CTkScrollableFrame(parent)
+        admin_active_inventory_frame.pack(expand=True, fill="both", padx=10, pady=(0, 10))
+        self.admin_project_widgets[project]['active_inventory_frame'] = admin_active_inventory_frame
 
         # Configure columns
         for i in range(6):
-            self.admin_active_inventory_frame.grid_columnconfigure(i, weight=1)
+            admin_active_inventory_frame.grid_columnconfigure(i, weight=1)
 
-        self._refresh_admin_active_inventory()
+        self._refresh_admin_active_inventory(project)
 
-    def _create_archived_inventory_view(self, parent):
-        """Create the archived inventory view."""
+    def _create_archived_inventory_view(self, parent, project: str = "ecoflow"):
+        """Create the archived inventory view for a specific project."""
         # Header with refresh button
         header_frame = ctk.CTkFrame(parent, fg_color="transparent")
         header_frame.pack(fill="x", padx=10, pady=(10, 5))
@@ -1028,90 +1083,93 @@ Start-Sleep -Seconds 3
             text="Refresh",
             width=100,
             font=ctk.CTkFont(size=14),
-            command=self._refresh_admin_archived_inventory
+            command=lambda p=project: self._refresh_admin_archived_inventory(p)
         )
         refresh_btn.pack(side="right")
 
         # Scrollable frame for inventory list
-        self.admin_archived_inventory_frame = ctk.CTkScrollableFrame(parent)
-        self.admin_archived_inventory_frame.pack(expand=True, fill="both", padx=10, pady=(0, 10))
+        admin_archived_inventory_frame = ctk.CTkScrollableFrame(parent)
+        admin_archived_inventory_frame.pack(expand=True, fill="both", padx=10, pady=(0, 10))
+        self.admin_project_widgets[project]['archived_inventory_frame'] = admin_archived_inventory_frame
 
         # Configure columns
         for i in range(7):
-            self.admin_archived_inventory_frame.grid_columnconfigure(i, weight=1)
+            admin_archived_inventory_frame.grid_columnconfigure(i, weight=1)
 
-        self._refresh_admin_archived_inventory()
+        self._refresh_admin_archived_inventory(project)
 
-    def _refresh_admin_active_inventory(self):
-        """Refresh the admin active inventory list."""
-        for widget in self.admin_active_inventory_frame.winfo_children():
+    def _refresh_admin_active_inventory(self, project: str = "ecoflow"):
+        """Refresh the admin active inventory list for a specific project."""
+        admin_active_inventory_frame = self.admin_project_widgets[project]['active_inventory_frame']
+        for widget in admin_active_inventory_frame.winfo_children():
             widget.destroy()
 
         # Header row
         headers = ["SKU", "Serial Number", "LPN", "Repair State", "Entered By", "Date"]
         for col, header in enumerate(headers):
             label = ctk.CTkLabel(
-                self.admin_active_inventory_frame,
+                admin_active_inventory_frame,
                 text=header,
                 font=ctk.CTkFont(size=14, weight="bold")
             )
             label.grid(row=0, column=col, padx=5, pady=(0, 10), sticky="w")
 
         # Inventory rows
-        items = get_all_inventory()
+        items = get_all_inventory(project)
         for row, item in enumerate(items, start=1):
-            ctk.CTkLabel(self.admin_active_inventory_frame, text=item['item_sku'], font=ctk.CTkFont(size=13)).grid(
+            ctk.CTkLabel(admin_active_inventory_frame, text=item['item_sku'], font=ctk.CTkFont(size=13)).grid(
                 row=row, column=0, padx=5, pady=3, sticky="w")
-            ctk.CTkLabel(self.admin_active_inventory_frame, text=item['serial_number'], font=ctk.CTkFont(size=13)).grid(
+            ctk.CTkLabel(admin_active_inventory_frame, text=item['serial_number'], font=ctk.CTkFont(size=13)).grid(
                 row=row, column=1, padx=5, pady=3, sticky="w")
-            ctk.CTkLabel(self.admin_active_inventory_frame, text=item['lpn'], font=ctk.CTkFont(size=13)).grid(
+            ctk.CTkLabel(admin_active_inventory_frame, text=item['lpn'], font=ctk.CTkFont(size=13)).grid(
                 row=row, column=2, padx=5, pady=3, sticky="w")
-            ctk.CTkLabel(self.admin_active_inventory_frame, text=item['repair_state'], font=ctk.CTkFont(size=13)).grid(
+            ctk.CTkLabel(admin_active_inventory_frame, text=item['repair_state'], font=ctk.CTkFont(size=13)).grid(
                 row=row, column=3, padx=5, pady=3, sticky="w")
-            ctk.CTkLabel(self.admin_active_inventory_frame, text=item['entered_by'], font=ctk.CTkFont(size=13)).grid(
+            ctk.CTkLabel(admin_active_inventory_frame, text=item['entered_by'], font=ctk.CTkFont(size=13)).grid(
                 row=row, column=4, padx=5, pady=3, sticky="w")
-            date_str = item['created_at'].split('T')[0] if 'T' in item['created_at'] else item['created_at'][:10]
-            ctk.CTkLabel(self.admin_active_inventory_frame, text=date_str, font=ctk.CTkFont(size=13)).grid(
+            date_str = item['created_at'].replace('T', ' ')[:16] if 'T' in item['created_at'] else item['created_at'][:16]
+            ctk.CTkLabel(admin_active_inventory_frame, text=date_str, font=ctk.CTkFont(size=13)).grid(
                 row=row, column=5, padx=5, pady=3, sticky="w")
 
-    def _refresh_admin_archived_inventory(self):
-        """Refresh the admin archived inventory list."""
-        for widget in self.admin_archived_inventory_frame.winfo_children():
+    def _refresh_admin_archived_inventory(self, project: str = "ecoflow"):
+        """Refresh the admin archived inventory list for a specific project."""
+        admin_archived_inventory_frame = self.admin_project_widgets[project]['archived_inventory_frame']
+        for widget in admin_archived_inventory_frame.winfo_children():
             widget.destroy()
 
         # Header row
         headers = ["SKU", "Serial Number", "LPN", "Repair State", "Entered By", "Created", "Archived"]
         for col, header in enumerate(headers):
             label = ctk.CTkLabel(
-                self.admin_archived_inventory_frame,
+                admin_archived_inventory_frame,
                 text=header,
                 font=ctk.CTkFont(size=14, weight="bold")
             )
             label.grid(row=0, column=col, padx=5, pady=(0, 10), sticky="w")
 
         # Inventory rows
-        items = get_all_imported_inventory()
+        items = get_all_imported_inventory(project)
         for row, item in enumerate(items, start=1):
-            ctk.CTkLabel(self.admin_archived_inventory_frame, text=item['item_sku'], font=ctk.CTkFont(size=13)).grid(
+            ctk.CTkLabel(admin_archived_inventory_frame, text=item['item_sku'], font=ctk.CTkFont(size=13)).grid(
                 row=row, column=0, padx=5, pady=3, sticky="w")
-            ctk.CTkLabel(self.admin_archived_inventory_frame, text=item['serial_number'], font=ctk.CTkFont(size=13)).grid(
+            ctk.CTkLabel(admin_archived_inventory_frame, text=item['serial_number'], font=ctk.CTkFont(size=13)).grid(
                 row=row, column=1, padx=5, pady=3, sticky="w")
-            ctk.CTkLabel(self.admin_archived_inventory_frame, text=item['lpn'], font=ctk.CTkFont(size=13)).grid(
+            ctk.CTkLabel(admin_archived_inventory_frame, text=item['lpn'], font=ctk.CTkFont(size=13)).grid(
                 row=row, column=2, padx=5, pady=3, sticky="w")
-            ctk.CTkLabel(self.admin_archived_inventory_frame, text=item['repair_state'], font=ctk.CTkFont(size=13)).grid(
+            ctk.CTkLabel(admin_archived_inventory_frame, text=item['repair_state'], font=ctk.CTkFont(size=13)).grid(
                 row=row, column=3, padx=5, pady=3, sticky="w")
-            ctk.CTkLabel(self.admin_archived_inventory_frame, text=item['entered_by'], font=ctk.CTkFont(size=13)).grid(
+            ctk.CTkLabel(admin_archived_inventory_frame, text=item['entered_by'], font=ctk.CTkFont(size=13)).grid(
                 row=row, column=4, padx=5, pady=3, sticky="w")
-            created_str = item['created_at'].split('T')[0] if 'T' in item['created_at'] else item['created_at'][:10]
-            ctk.CTkLabel(self.admin_archived_inventory_frame, text=created_str, font=ctk.CTkFont(size=13)).grid(
+            created_str = item['created_at'].replace('T', ' ')[:16] if 'T' in item['created_at'] else item['created_at'][:16]
+            ctk.CTkLabel(admin_archived_inventory_frame, text=created_str, font=ctk.CTkFont(size=13)).grid(
                 row=row, column=5, padx=5, pady=3, sticky="w")
-            archived_str = item['imported_at'].split('T')[0] if 'T' in item['imported_at'] else item['imported_at'][:10]
-            ctk.CTkLabel(self.admin_archived_inventory_frame, text=archived_str, font=ctk.CTkFont(size=13)).grid(
+            archived_str = item['imported_at'].replace('T', ' ')[:16] if 'T' in item['imported_at'] else item['imported_at'][:16]
+            ctk.CTkLabel(admin_archived_inventory_frame, text=archived_str, font=ctk.CTkFont(size=13)).grid(
                 row=row, column=6, padx=5, pady=3, sticky="w")
 
-    def _handle_admin_export_inventory(self):
+    def _handle_admin_export_inventory(self, project: str = "ecoflow"):
         """Handle export and archive of inventory from admin panel."""
-        items = get_all_inventory()
+        items = get_all_inventory(project)
 
         if not items:
             # Show a simple dialog for admin since they don't have user_status_label
@@ -1126,9 +1184,10 @@ Start-Sleep -Seconds 3
             dialog.grab_set()
             return
 
-        # Generate filename with today's date
-        today = date.today().strftime("%Y-%m-%d")
-        default_filename = f"EcoFlow stock import({today}).csv"
+        # Generate filename with today's date and time
+        now = datetime.now().strftime("%Y-%m-%d %H-%M-%S")
+        project_name = project.capitalize()
+        default_filename = f"{project_name} stock import({now}).csv"
         default_dir = r"T:\3PL Files\Stock Import"
 
         # Ask user where to save the file
@@ -1144,11 +1203,11 @@ Start-Sleep -Seconds 3
             return  # User cancelled
 
         # Move items to imported inventory and export CSV
-        moved_items = move_inventory_to_imported()
+        moved_items = move_inventory_to_imported(project)
 
-        if export_inventory_to_csv(moved_items, filepath):
-            self._refresh_admin_active_inventory()
-            self._refresh_admin_archived_inventory()
+        if export_inventory_to_csv(moved_items, filepath, project):
+            self._refresh_admin_active_inventory(project)
+            self._refresh_admin_archived_inventory(project)
             self._play_success_sound()
             # Show success dialog
             dialog = ctk.CTkToplevel(self)
