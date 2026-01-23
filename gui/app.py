@@ -96,7 +96,7 @@ class MainApplication(ctk.CTk):
                             return
                         except Exception:
                             pass
-                    
+
                     # For MP3 files, try multiple approaches
                     # Method 1: Try pygame (if installed)
                     try:
@@ -112,7 +112,7 @@ class MainApplication(ctk.CTk):
                         return
                     except (ImportError, Exception):
                         pass
-                    
+
                     # Method 2: Try playsound library (if installed)
                     try:
                         from playsound import playsound
@@ -120,7 +120,7 @@ class MainApplication(ctk.CTk):
                         return
                     except (ImportError, Exception):
                         pass
-                    
+
                     # Method 3: Use Windows Media Player via COM
                     try:
                         import win32com.client
@@ -131,7 +131,7 @@ class MainApplication(ctk.CTk):
                         return
                     except (ImportError, Exception):
                         pass
-                    
+
                     # Method 4: PowerShell with Windows Media Player
                     try:
                         ps_script = f'''
@@ -740,9 +740,29 @@ Start-Sleep -Seconds 3
 
     def _hide_sku_suggestions(self, event, project: str = "ecoflow"):
         """Hide the autocomplete suggestions."""
-        if project in self.project_widgets and self.project_widgets[project]['sku_suggestions_frame']:
-            self.project_widgets[project]['sku_suggestions_frame'].destroy()
-            self.project_widgets[project]['sku_suggestions_frame'] = None
+        def do_hide():
+            if project not in self.project_widgets:
+                return
+            suggestions_frame = self.project_widgets[project]['sku_suggestions_frame']
+            if not suggestions_frame:
+                return
+            try:
+                # Check if mouse is over the suggestions frame
+                x, y = suggestions_frame.winfo_pointerxy()
+                widget_x = suggestions_frame.winfo_rootx()
+                widget_y = suggestions_frame.winfo_rooty()
+                widget_w = suggestions_frame.winfo_width()
+                widget_h = suggestions_frame.winfo_height()
+
+                # If mouse is over suggestions, don't hide
+                if widget_x <= x <= widget_x + widget_w and widget_y <= y <= widget_y + widget_h:
+                    return
+
+                suggestions_frame.destroy()
+                self.project_widgets[project]['sku_suggestions_frame'] = None
+            except:
+                self.project_widgets[project]['sku_suggestions_frame'] = None
+        self.after(1000, do_hide)
 
     def _select_sku_suggestion(self, sku, project: str = "ecoflow"):
         """Select a SKU from suggestions."""
@@ -1531,9 +1551,29 @@ Start-Sleep -Seconds 3
 
     def _hide_admin_sku_suggestions(self, event, project: str = "ecoflow"):
         """Hide the admin autocomplete suggestions."""
-        if project in self.admin_project_widgets and self.admin_project_widgets[project].get('sku_suggestions_frame'):
-            self.admin_project_widgets[project]['sku_suggestions_frame'].destroy()
-            self.admin_project_widgets[project]['sku_suggestions_frame'] = None
+        def do_hide():
+            if project not in self.admin_project_widgets:
+                return
+            suggestions_frame = self.admin_project_widgets[project].get('sku_suggestions_frame')
+            if not suggestions_frame:
+                return
+            try:
+                # Check if mouse is over the suggestions frame
+                x, y = suggestions_frame.winfo_pointerxy()
+                widget_x = suggestions_frame.winfo_rootx()
+                widget_y = suggestions_frame.winfo_rooty()
+                widget_w = suggestions_frame.winfo_width()
+                widget_h = suggestions_frame.winfo_height()
+
+                # If mouse is over suggestions, don't hide
+                if widget_x <= x <= widget_x + widget_w and widget_y <= y <= widget_y + widget_h:
+                    return
+
+                suggestions_frame.destroy()
+                self.admin_project_widgets[project]['sku_suggestions_frame'] = None
+            except:
+                self.admin_project_widgets[project]['sku_suggestions_frame'] = None
+        self.after(1000, do_hide)
 
     def _select_admin_sku_suggestion(self, sku, project: str = "ecoflow"):
         """Select a SKU from admin suggestions."""

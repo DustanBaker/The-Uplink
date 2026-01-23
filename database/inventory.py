@@ -352,22 +352,22 @@ def export_inventory_to_csv(items: list[dict], filepath: str, project: str = "ec
                         rec_date = created[:19]
 
                     writer.writerow([
-                        item['serial_number'],      # SN
-                        item['lpn'],                # LPN
-                        item.get('location', ''),   # Location
-                        '57',                         # Client
-                        '',                         # PONo
-                        '',                         # Client Order
-                        item['item_sku'],           # SKU
-                        '',                         # Asset
-                        rec_date,                   # RecDate
-                        '1',                        # Qty
-                        '1',                        # Qty Free
-                        '',                         # WO #
-                        item['repair_state'],       # Repair State
-                        '',                         # Grade
-                        '',                         # Shippable
-                        ''                          # RMA #
+                        item['serial_number'] or '0',           # SN
+                        item['lpn'] or '0',                     # LPN
+                        item.get('location') or '0',            # Location
+                        '57',                                   # Client
+                        '0',                                    # PONo
+                        '0',                                    # Client Order
+                        item['item_sku'] or '0',                # SKU
+                        '0',                                    # Asset
+                        rec_date or '0',                        # RecDate
+                        '1',                                    # Qty
+                        '1',                                    # Qty Free
+                        '0',                                    # WO #
+                        item['repair_state'] or '0',            # Repair State
+                        '0',                                    # Grade
+                        '0',                                    # Shippable
+                        '0'                                     # RMA #
                     ])
             else:
                 # EcoFlow format - 18 columns
@@ -382,24 +382,24 @@ def export_inventory_to_csv(items: list[dict], filepath: str, project: str = "ec
                         rec_date = created[:19]
 
                     writer.writerow([
-                        item['serial_number'],      # SN
-                        item['lpn'],                # LPN
-                        item.get('location', ''),   # Location
-                        '82',                         # Client
-                        '',                         # PO #
-                        item.get('order_number', ''),  # Order #
-                        item['item_sku'],           # Item
-                        rec_date,                   # Rec Date
-                        '1',                        # Qty
-                        '1',                        # Qty Free
-                        '',                         # Shippable
-                        item['repair_state'],       # Repair State
-                        '',                         # Firmware
-                        '',                         # Program
-                        '',                         # Warranty
-                        '',                         # Consigned
-                        '',                         # PartType
-                        ''                          # Grade
+                        item['serial_number'] or '0',           # SN
+                        item['lpn'] or '0',                     # LPN
+                        item.get('location') or '0',            # Location
+                        '82',                                   # Client
+                        '0',                                    # PO #
+                        item.get('order_number') or '0',        # Order #
+                        item['item_sku'] or '0',                # Item
+                        rec_date or '0',                        # Rec Date
+                        '1',                                    # Qty
+                        '1',                                    # Qty Free
+                        '0',                                    # Shippable
+                        item['repair_state'] or '0',            # Repair State
+                        '0',                                    # Firmware
+                        '0',                                    # Program
+                        '0',                                    # Warranty
+                        '0',                                    # Consigned
+                        '0',                                    # PartType
+                        '0'                                     # Grade
                     ])
 
         return True

@@ -24,13 +24,25 @@ def create_default_user():
         print(f"Created default user: {DEFAULT_USERNAME} / {DEFAULT_PASSWORD}")
 
 
+def close_splash():
+    """Close the splash screen if running as frozen executable."""
+    try:
+        import pyi_splash
+        pyi_splash.close()
+    except ImportError:
+        pass  # Not running as frozen executable
+
+
 def run_app():
     """Run the application."""
     def on_login_success(user: dict):
-    
+
         """Callback when login is successful."""
         app = MainApplication(user, on_logout=run_app)
         app.mainloop()
+
+    # Close splash screen before showing login window
+    close_splash()
 
     login_window = LoginWindow(on_login_success=on_login_success)
     login_window.mainloop()

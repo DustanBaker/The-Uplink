@@ -48,9 +48,21 @@ a = Analysis(
 
 pyz = PYZ(a.pure, a.zipped_data, cipher=block_cipher)
 
+splash = Splash(
+    'gui/The Uplink logo.png',
+    binaries=a.binaries,
+    datas=a.datas,
+    text_pos=None,
+    text_size=12,
+    text_color='white',
+    minify_script=True,
+)
+
 exe = EXE(
     pyz,
     a.scripts,
+    splash,
+    splash.binaries,
     [],
     exclude_binaries=True,
     name='The-Uplink',
