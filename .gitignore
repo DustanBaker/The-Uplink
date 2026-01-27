@@ -19,3 +19,14 @@ venv/
 .vscode/
 *.swp
 *.swo
+
+# PyInstaller build artifacts
+build/
+dist/
+installer_output/
+
+# Windows reserved names
+nul
+
+# Claude Code
+.claude/
