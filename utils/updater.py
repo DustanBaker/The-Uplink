@@ -90,20 +90,20 @@ def show_update_dialog(parent, latest_version: str, download_url: str, release_n
 
     dialog = ctk.CTkToplevel(parent)
     dialog.title("Update Available")
-    dialog.geometry("450x300")
+    dialog.geometry("450x350")
     dialog.resizable(False, False)
     dialog.transient(parent)
 
     # Center dialog
     dialog.update_idletasks()
     x = parent.winfo_x() + (parent.winfo_width() // 2) - (450 // 2)
-    y = parent.winfo_y() + (parent.winfo_height() // 2) - (300 // 2)
+    y = parent.winfo_y() + (parent.winfo_height() // 2) - (350 // 2)
     dialog.geometry(f"+{x}+{y}")
 
     dialog.wait_visibility()
     dialog.grab_set()
 
-    # Content
+    # Content frame
     frame = ctk.CTkFrame(dialog, fg_color="transparent")
     frame.pack(expand=True, fill="both", padx=20, pady=20)
 
@@ -137,14 +137,15 @@ def show_update_dialog(parent, latest_version: str, download_url: str, release_n
         )
         notes_label.pack(anchor="w")
 
-    # Buttons
+    # Buttons frame - pack at bottom with padding
     button_frame = ctk.CTkFrame(frame, fg_color="transparent")
-    button_frame.pack(fill="x", side="bottom")
+    button_frame.pack(fill="x", side="bottom", pady=(20, 0))
 
     later_btn = ctk.CTkButton(
         button_frame,
         text="Later",
         width=130,
+        height=40,
         font=ctk.CTkFont(size=14),
         fg_color="gray",
         command=dialog.destroy
@@ -159,6 +160,7 @@ def show_update_dialog(parent, latest_version: str, download_url: str, release_n
         button_frame,
         text="Download Update",
         width=150,
+        height=40,
         font=ctk.CTkFont(size=14),
         fg_color="#28a745",
         hover_color="#218838",
