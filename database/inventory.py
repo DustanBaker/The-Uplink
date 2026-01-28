@@ -351,12 +351,15 @@ def export_inventory_to_csv(items: list[dict], filepath: str, project: str = "ec
                     else:
                         rec_date = created[:19]
 
+                    # Look up PO # from SN lookup table
+                    po_number = lookup_halo_po_number(item['serial_number']) or '0'
+
                     writer.writerow([
                         item['serial_number'] or '0',           # SN
                         item['lpn'] or '0',                     # LPN
                         item.get('location') or '0',            # Location
                         '57',                                   # Client
-                        '0',                                    # PONo
+                        po_number,                              # PONo (from SN lookup)
                         '0',                                    # Client Order
                         item['item_sku'] or '0',                # SKU
                         '0',                                    # Asset
@@ -405,3 +408,108 @@ def export_inventory_to_csv(items: list[dict], filepath: str, project: str = "ec
         return True
     except Exception:
         return False
+
+
+# ==================== Halo SN Lookup Functions ====================
+
+def get_halo_sn_lookup_db_path() -> Path:
+    """Get the Halo SN lookup database path."""
+    users_db = get_db_path()
+    return users_db.parent / "halo_sn_lookup.db"
+
+
+def get_sn_lookup_connection():
+    """Get a connection to the Halo SN lookup database."""
+    db_path = get_halo_sn_lookup_db_path()
+    db_path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(db_path, timeout=DB_TIMEOUT)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA synchronous=NORMAL")
+    return conn
+
+
+@with_retry
+def init_halo_sn_lookup_db():
+    """Initialize the Halo SN lookup database."""
+    conn = get_sn_lookup_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sn_lookup (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            serial_number TEXT NOT NULL UNIQUE,
+            po_number TEXT NOT NULL
+        )
+    """)
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_sn_lookup_serial ON sn_lookup(serial_number)")
+    conn.commit()
+    conn.close()
+
+
+@with_retry
+def import_halo_sn_lookup_csv(csv_path: str) -> int:
+    """Import Halo SN lookup data from CSV file.
+
+    Returns the number of records imported.
+    """
+    import csv
+
+    init_halo_sn_lookup_db()
+
+    conn = get_sn_lookup_connection()
+    cursor = conn.cursor()
+
+    # Clear existing data
+    cursor.execute("DELETE FROM sn_lookup")
+
+    count = 0
+    with open(csv_path, 'r', newline='', encoding='utf-8') as f:
+        reader = csv.reader(f)
+        # Skip header row
+        next(reader, None)
+
+        for row in reader:
+            if len(row) >= 2 and row[0].strip():
+                serial_number = row[0].strip()
+                po_number = row[1].strip() if row[1].strip() else ''
+                try:
+                    cursor.execute(
+                        "INSERT OR REPLACE INTO sn_lookup (serial_number, po_number) VALUES (?, ?)",
+                        (serial_number, po_number)
+                    )
+                    count += 1
+                except:
+                    pass  # Skip invalid rows
+
+    conn.commit()
+    conn.close()
+    return count
+
+
+@with_retry
+def lookup_halo_po_number(serial_number: str) -> str:
+    """Look up PO number for a Halo serial number.
+
+    Returns the PO number if found, empty string otherwise.
+    """
+    init_halo_sn_lookup_db()
+
+    conn = get_sn_lookup_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT po_number FROM sn_lookup WHERE serial_number = ?", (serial_number,))
+    row = cursor.fetchone()
+    conn.close()
+
+    return row[0] if row else ''
+
+
+@with_retry
+def get_halo_sn_lookup_count() -> int:
+    """Get the number of records in the Halo SN lookup table."""
+    init_halo_sn_lookup_db()
+
+    conn = get_sn_lookup_connection()
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM sn_lookup")
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count

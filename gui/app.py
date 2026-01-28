@@ -10,7 +10,8 @@ import platform
 from database import (
     create_user, get_all_users, update_user_password, update_user_admin_status, delete_user,
     add_inventory_item, get_all_inventory, update_inventory_item, delete_inventory_item,
-    move_inventory_to_imported, export_inventory_to_csv, get_all_imported_inventory
+    move_inventory_to_imported, export_inventory_to_csv, get_all_imported_inventory,
+    lookup_halo_po_number
 )
 from database.sku_cache import (
     add_sku_cached as add_sku,
@@ -429,11 +430,8 @@ Start-Sleep -Seconds 3
         for widget in inventory_list_frame.winfo_children():
             widget.destroy()
 
-        # Header row - include Order # for EcoFlow only (between LPN and Location)
-        if project != "halo":
-            headers = ["SKU", "Serial Number", "LPN", "Order #", "Location", "Repair State", "Entered By", "Date", "", ""]
-        else:
-            headers = ["SKU", "Serial Number", "LPN", "Location", "Repair State", "Entered By", "Date", "", ""]
+        # Header row - include PO # for both projects (between LPN and Location)
+        headers = ["SKU", "Serial Number", "LPN", "PO #", "Location", "Repair State", "Entered By", "Date", "", ""]
         for col, header in enumerate(headers):
             label = ctk.CTkLabel(
                 inventory_list_frame,
@@ -455,11 +453,14 @@ Start-Sleep -Seconds 3
             ctk.CTkLabel(inventory_list_frame, text=item['lpn'], font=ctk.CTkFont(size=14)).grid(
                 row=row, column=col, padx=5, pady=3, sticky="w")
             col += 1
-            # Order # column for EcoFlow only (between LPN and Location)
-            if project != "halo":
-                ctk.CTkLabel(inventory_list_frame, text=item.get('order_number', ''), font=ctk.CTkFont(size=14)).grid(
-                    row=row, column=col, padx=5, pady=3, sticky="w")
-                col += 1
+            # PO # column - EcoFlow uses order_number, Halo uses SN lookup
+            if project == "halo":
+                po_number = lookup_halo_po_number(item['serial_number']) or '0'
+            else:
+                po_number = item.get('order_number', '')
+            ctk.CTkLabel(inventory_list_frame, text=po_number, font=ctk.CTkFont(size=14)).grid(
+                row=row, column=col, padx=5, pady=3, sticky="w")
+            col += 1
             ctk.CTkLabel(inventory_list_frame, text=item.get('location', ''), font=ctk.CTkFont(size=14)).grid(
                 row=row, column=col, padx=5, pady=3, sticky="w")
             col += 1
@@ -1297,8 +1298,8 @@ Start-Sleep -Seconds 3
         admin_active_inventory_frame.pack(expand=True, fill="both", padx=10, pady=(0, 10))
         self.admin_project_widgets[project]['active_inventory_frame'] = admin_active_inventory_frame
 
-        # Configure columns (EcoFlow has extra Order # column)
-        num_columns = 7 if project != "halo" else 6
+        # Configure columns (EcoFlow has extra Order # column, plus Actions column)
+        num_columns = 8 if project != "halo" else 7
         for i in range(num_columns):
             admin_active_inventory_frame.grid_columnconfigure(i, weight=1)
 
@@ -1344,11 +1345,8 @@ Start-Sleep -Seconds 3
         for widget in admin_active_inventory_frame.winfo_children():
             widget.destroy()
 
-        # Header row - include Order # for EcoFlow only (between LPN and Repair State)
-        if project != "halo":
-            headers = ["SKU", "Serial Number", "LPN", "Order #", "Repair State", "Entered By", "Date"]
-        else:
-            headers = ["SKU", "Serial Number", "LPN", "Repair State", "Entered By", "Date"]
+        # Header row - include PO # for both projects (between LPN and Repair State)
+        headers = ["SKU", "Serial Number", "LPN", "PO #", "Repair State", "Entered By", "Date", "Actions"]
         for col, header in enumerate(headers):
             label = ctk.CTkLabel(
                 admin_active_inventory_frame,
@@ -1370,11 +1368,14 @@ Start-Sleep -Seconds 3
             ctk.CTkLabel(admin_active_inventory_frame, text=item['lpn'], font=ctk.CTkFont(size=13)).grid(
                 row=row, column=col, padx=5, pady=3, sticky="w")
             col += 1
-            # Order # column for EcoFlow only
-            if project != "halo":
-                ctk.CTkLabel(admin_active_inventory_frame, text=item.get('order_number', ''), font=ctk.CTkFont(size=13)).grid(
-                    row=row, column=col, padx=5, pady=3, sticky="w")
-                col += 1
+            # PO # column - EcoFlow uses order_number, Halo uses SN lookup
+            if project == "halo":
+                po_number = lookup_halo_po_number(item['serial_number']) or '0'
+            else:
+                po_number = item.get('order_number', '')
+            ctk.CTkLabel(admin_active_inventory_frame, text=po_number, font=ctk.CTkFont(size=13)).grid(
+                row=row, column=col, padx=5, pady=3, sticky="w")
+            col += 1
             ctk.CTkLabel(admin_active_inventory_frame, text=item['repair_state'], font=ctk.CTkFont(size=13)).grid(
                 row=row, column=col, padx=5, pady=3, sticky="w")
             col += 1
@@ -1384,6 +1385,33 @@ Start-Sleep -Seconds 3
             date_str = item['created_at'].replace('T', ' ')[:16] if 'T' in item['created_at'] else item['created_at'][:16]
             ctk.CTkLabel(admin_active_inventory_frame, text=date_str, font=ctk.CTkFont(size=13)).grid(
                 row=row, column=col, padx=5, pady=3, sticky="w")
+            col += 1
+
+            # Action buttons frame
+            action_frame = ctk.CTkFrame(admin_active_inventory_frame, fg_color="transparent")
+            action_frame.grid(row=row, column=col, padx=2, pady=3, sticky="w")
+
+            edit_btn = ctk.CTkButton(
+                action_frame,
+                text="Edit",
+                width=50,
+                height=24,
+                font=ctk.CTkFont(size=11),
+                command=lambda i=item, p=project: self._show_admin_edit_inventory_dialog(i, p)
+            )
+            edit_btn.pack(side="left", padx=(0, 3))
+
+            delete_btn = ctk.CTkButton(
+                action_frame,
+                text="Delete",
+                width=50,
+                height=24,
+                font=ctk.CTkFont(size=11),
+                fg_color="#dc3545",
+                hover_color="#c82333",
+                command=lambda i=item, p=project: self._admin_delete_inventory_item(i, p)
+            )
+            delete_btn.pack(side="left")
 
     def _refresh_admin_archived_inventory(self, project: str = "ecoflow"):
         """Refresh the admin archived inventory list for a specific project."""
@@ -1391,11 +1419,8 @@ Start-Sleep -Seconds 3
         for widget in admin_archived_inventory_frame.winfo_children():
             widget.destroy()
 
-        # Header row - include Order # for EcoFlow only (between LPN and Repair State)
-        if project != "halo":
-            headers = ["SKU", "Serial Number", "LPN", "Order #", "Repair State", "Entered By", "Created", "Archived"]
-        else:
-            headers = ["SKU", "Serial Number", "LPN", "Repair State", "Entered By", "Created", "Archived"]
+        # Header row - include PO # for both projects (between LPN and Repair State)
+        headers = ["SKU", "Serial Number", "LPN", "PO #", "Repair State", "Entered By", "Created", "Archived"]
         for col, header in enumerate(headers):
             label = ctk.CTkLabel(
                 admin_archived_inventory_frame,
@@ -1417,11 +1442,14 @@ Start-Sleep -Seconds 3
             ctk.CTkLabel(admin_archived_inventory_frame, text=item['lpn'], font=ctk.CTkFont(size=13)).grid(
                 row=row, column=col, padx=5, pady=3, sticky="w")
             col += 1
-            # Order # column for EcoFlow only
-            if project != "halo":
-                ctk.CTkLabel(admin_archived_inventory_frame, text=item.get('order_number', ''), font=ctk.CTkFont(size=13)).grid(
-                    row=row, column=col, padx=5, pady=3, sticky="w")
-                col += 1
+            # PO # column - EcoFlow uses order_number, Halo uses SN lookup
+            if project == "halo":
+                po_number = lookup_halo_po_number(item['serial_number']) or '0'
+            else:
+                po_number = item.get('order_number', '')
+            ctk.CTkLabel(admin_archived_inventory_frame, text=po_number, font=ctk.CTkFont(size=13)).grid(
+                row=row, column=col, padx=5, pady=3, sticky="w")
+            col += 1
             ctk.CTkLabel(admin_archived_inventory_frame, text=item['repair_state'], font=ctk.CTkFont(size=13)).grid(
                 row=row, column=col, padx=5, pady=3, sticky="w")
             col += 1
@@ -1435,6 +1463,158 @@ Start-Sleep -Seconds 3
             archived_str = item['imported_at'].replace('T', ' ')[:16] if 'T' in item['imported_at'] else item['imported_at'][:16]
             ctk.CTkLabel(admin_archived_inventory_frame, text=archived_str, font=ctk.CTkFont(size=13)).grid(
                 row=row, column=col, padx=5, pady=3, sticky="w")
+
+    def _show_admin_edit_inventory_dialog(self, item: dict, project: str = "ecoflow"):
+        """Show dialog to edit an inventory item from admin view."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title(f"Edit Item - {item['item_sku']}")
+        dialog_height = 510 if project != "halo" else 450
+        dialog.geometry(f"400x{dialog_height}")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+
+        frame = ctk.CTkFrame(dialog)
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        # Item SKU
+        ctk.CTkLabel(frame, text="Item SKU", font=ctk.CTkFont(size=14)).pack(anchor="w")
+        sku_entry = ctk.CTkEntry(frame, width=300, font=ctk.CTkFont(size=14))
+        sku_entry.insert(0, item['item_sku'])
+        sku_entry.pack(pady=(0, 15))
+
+        # Serial Number
+        ctk.CTkLabel(frame, text="Serial Number", font=ctk.CTkFont(size=14)).pack(anchor="w")
+        serial_entry = ctk.CTkEntry(frame, width=300, font=ctk.CTkFont(size=14))
+        serial_entry.insert(0, item['serial_number'])
+        serial_entry.pack(pady=(0, 15))
+
+        # LPN
+        ctk.CTkLabel(frame, text="LPN", font=ctk.CTkFont(size=14)).pack(anchor="w")
+        lpn_entry = ctk.CTkEntry(frame, width=300, font=ctk.CTkFont(size=14))
+        lpn_entry.insert(0, item['lpn'])
+        lpn_entry.pack(pady=(0, 15))
+
+        # Order Number (EcoFlow only)
+        order_entry = None
+        if project != "halo":
+            ctk.CTkLabel(frame, text="Order #", font=ctk.CTkFont(size=14)).pack(anchor="w")
+            order_entry = ctk.CTkEntry(frame, width=300, font=ctk.CTkFont(size=14))
+            order_entry.insert(0, item.get('order_number', ''))
+            order_entry.pack(pady=(0, 15))
+
+        # Repair State
+        ctk.CTkLabel(frame, text="Repair State", font=ctk.CTkFont(size=14)).pack(anchor="w")
+        repair_options = ["RTV", "Tested Good", "Needs Repair", "Damaged", "Unknown"]
+        repair_dropdown = ctk.CTkOptionMenu(frame, values=repair_options, width=300)
+        if item['repair_state'] in repair_options:
+            repair_dropdown.set(item['repair_state'])
+        else:
+            repair_dropdown.set(repair_options[0])
+        repair_dropdown.pack(pady=(0, 15))
+
+        # Status label
+        status_label = ctk.CTkLabel(frame, text="", font=ctk.CTkFont(size=12))
+        status_label.pack(pady=(0, 10))
+
+        def save_changes():
+            sku = sku_entry.get().strip()
+            serial = serial_entry.get().strip()
+            lpn = lpn_entry.get().strip()
+            repair_state = repair_dropdown.get()
+            order_number = order_entry.get().strip() if order_entry else ""
+
+            if not sku or not serial or not lpn:
+                status_label.configure(text="All fields are required", text_color="red")
+                self._play_error_sound()
+                return
+
+            # Validate LPN: must be exactly 11 digits
+            if not lpn.isdigit() or len(lpn) != 11:
+                status_label.configure(text="LPN must be exactly 11 digits", text_color="red")
+                self._play_error_sound()
+                return
+
+            if update_inventory_item(item['id'], sku, serial, lpn, item.get('location', ''), repair_state, project, order_number):
+                dialog.destroy()
+                self._refresh_admin_active_inventory(project)
+                self._play_success_sound()
+            else:
+                status_label.configure(text="Failed to update item", text_color="red")
+                self._play_error_sound()
+
+        # Buttons
+        button_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        button_frame.pack(fill="x")
+
+        cancel_btn = ctk.CTkButton(
+            button_frame,
+            text="Cancel",
+            width=100,
+            fg_color="gray",
+            command=dialog.destroy
+        )
+        cancel_btn.pack(side="left")
+
+        save_btn = ctk.CTkButton(
+            button_frame,
+            text="Save",
+            width=100,
+            command=save_changes
+        )
+        save_btn.pack(side="right")
+
+    def _admin_delete_inventory_item(self, item: dict, project: str = "ecoflow"):
+        """Delete an inventory item with confirmation from admin view."""
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Confirm Delete")
+        dialog.geometry("350x180")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+
+        frame = ctk.CTkFrame(dialog)
+        frame.pack(fill="both", expand=True, padx=20, pady=20)
+
+        ctk.CTkLabel(
+            frame,
+            text="Are you sure you want to delete this item?",
+            font=ctk.CTkFont(size=14, weight="bold")
+        ).pack(pady=(0, 10))
+
+        ctk.CTkLabel(
+            frame,
+            text=f"SKU: {item['item_sku']}\nSerial: {item['serial_number']}",
+            font=ctk.CTkFont(size=13)
+        ).pack(pady=(0, 20))
+
+        def do_delete():
+            if delete_inventory_item(item['id'], project):
+                dialog.destroy()
+                self._refresh_admin_active_inventory(project)
+                self._play_success_sound()
+            else:
+                self._play_error_sound()
+
+        button_frame = ctk.CTkFrame(frame, fg_color="transparent")
+        button_frame.pack(fill="x")
+
+        cancel_btn = ctk.CTkButton(
+            button_frame,
+            text="Cancel",
+            width=100,
+            fg_color="gray",
+            command=dialog.destroy
+        )
+        cancel_btn.pack(side="left")
+
+        delete_btn = ctk.CTkButton(
+            button_frame,
+            text="Delete",
+            width=100,
+            fg_color="#dc3545",
+            hover_color="#c82333",
+            command=do_delete
+        )
+        delete_btn.pack(side="right")
 
     def _handle_admin_export_inventory(self, project: str = "ecoflow"):
         """Handle export and archive of inventory from admin panel."""

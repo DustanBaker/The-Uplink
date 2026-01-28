@@ -26,4 +26,9 @@ from .inventory import (
     move_inventory_to_imported,
     export_inventory_to_csv,
     get_all_imported_inventory,
+    # Halo SN lookup functions
+    init_halo_sn_lookup_db,
+    import_halo_sn_lookup_csv,
+    lookup_halo_po_number,
+    get_halo_sn_lookup_count,
 )
