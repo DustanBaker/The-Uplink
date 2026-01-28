@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 # Application version (update this when releasing new versions)
-VERSION = "0.0.1"
+VERSION = "1.0.0"
 
 # GitHub repository for auto-updates (format: "owner/repo")
 # Set to None to disable update checking

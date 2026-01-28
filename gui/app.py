@@ -865,7 +865,10 @@ Start-Sleep -Seconds 3
         now = datetime.now().strftime("%Y-%m-%d %H-%M-%S")
         project_name = project.capitalize()
         default_filename = f"{project_name} stock import({now}).csv"
-        default_dir = r"T:\3PL Files\Stock Import"
+        if project == "halo":
+            default_dir = r"T:\InterfacesFiles\In"
+        else:
+            default_dir = r"T:\3PL Files\Stock Import"
 
         # Ask user where to save the file
         filepath = filedialog.asksaveasfilename(
@@ -1454,7 +1457,10 @@ Start-Sleep -Seconds 3
         now = datetime.now().strftime("%Y-%m-%d %H-%M-%S")
         project_name = project.capitalize()
         default_filename = f"{project_name} stock import({now}).csv"
-        default_dir = r"T:\3PL Files\Stock Import"
+        if project == "halo":
+            default_dir = r"T:\InterfacesFiles\In"
+        else:
+            default_dir = r"T:\3PL Files\Stock Import"
 
         # Ask user where to save the file
         filepath = filedialog.asksaveasfilename(
