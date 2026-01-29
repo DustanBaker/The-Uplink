@@ -27,8 +27,8 @@ from database.sku_cache import (
     start_background_sync,
     stop_background_sync
 )
-from utils import hash_password, get_gui_resource, check_for_updates, show_update_dialog, send_csv_email, test_email_connection
-from config import VERSION, GITHUB_REPO
+from utils import hash_password, get_gui_resource, check_for_updates, check_for_updates_shared_drive, show_update_dialog, send_csv_email, test_email_connection
+from config import VERSION, GITHUB_REPO, UPDATE_PATH
 
 
 class MainApplication(ctk.CTk):
@@ -174,10 +174,7 @@ Start-Sleep -Seconds 3
         self._play_sound("arc_raiders.mp3")
 
     def _check_for_updates(self):
-        """Check for application updates from GitHub releases."""
-        if not GITHUB_REPO or GITHUB_REPO == "YOUR_USERNAME/The-Uplink":
-            return  # Update checking not configured
-
+        """Check for application updates from shared drive or GitHub."""
         def on_update_check(has_update, latest_version, download_url, release_notes):
             if has_update:
                 # Schedule dialog to run on main thread
@@ -185,7 +182,11 @@ Start-Sleep -Seconds 3
                     self, latest_version, download_url, release_notes
                 ))
 
-        check_for_updates(GITHUB_REPO, VERSION, on_update_check)
+        # Prefer shared drive updates if configured
+        if UPDATE_PATH:
+            check_for_updates_shared_drive(UPDATE_PATH, VERSION, on_update_check)
+        elif GITHUB_REPO and GITHUB_REPO != "YOUR_USERNAME/The-Uplink":
+            check_for_updates(GITHUB_REPO, VERSION, on_update_check)
 
     def destroy(self):
         """Override destroy to clean up background sync thread."""

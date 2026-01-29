@@ -4,11 +4,16 @@ import os
 from pathlib import Path
 
 # Application version (update this when releasing new versions)
-VERSION = "1.0.4"
+VERSION = "1.0.5"
 
 # GitHub repository for auto-updates (format: "owner/repo")
-# Set to None to disable update checking
-GITHUB_REPO = "DustanBaker/The-Uplink"  # TODO: Replace with your GitHub repo
+# Set to None to disable GitHub update checking
+GITHUB_REPO = None  # Disabled - using shared drive updates instead
+
+# Shared drive update path
+# The app will check this folder for updates instead of GitHub
+# Expected files: version.txt, release_notes.txt, The-Uplink-Setup.exe
+UPDATE_PATH = r"P:\Dusty\database\updates"
 
 # Database path configuration
 # Priority: Environment variable > config file > default local path

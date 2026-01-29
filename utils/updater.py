@@ -1,7 +1,10 @@
-"""Auto-update functionality using GitHub releases."""
+"""Auto-update functionality using shared drive or GitHub releases."""
 
 import threading
 import webbrowser
+import subprocess
+import os
+from pathlib import Path
 from urllib.request import urlopen, Request
 from urllib.error import URLError, HTTPError
 import json
@@ -25,6 +28,62 @@ def parse_version(version_str: str) -> tuple:
 def is_newer_version(latest: str, current: str) -> bool:
     """Check if latest version is newer than current version."""
     return parse_version(latest) > parse_version(current)
+
+
+def check_for_updates_shared_drive(update_path: str, current_version: str, callback: callable):
+    """Check shared drive for updates in a background thread.
+
+    Args:
+        update_path: Path to the updates folder on shared drive
+        current_version: Current app version string
+        callback: Function to call with (has_update, latest_version, installer_path, release_notes)
+                  Called with (False, None, None, None) if check fails or no update
+
+    Expected files in update_path:
+        - version.txt: Contains just the version number (e.g., "1.0.5")
+        - release_notes.txt: Contains release notes (optional)
+        - The-Uplink-Setup.exe: The installer
+    """
+    def do_check():
+        try:
+            update_dir = Path(update_path)
+            version_file = update_dir / "version.txt"
+            notes_file = update_dir / "release_notes.txt"
+            installer_file = update_dir / "The-Uplink-Setup.exe"
+
+            # Check if version file exists
+            if not version_file.exists():
+                callback(False, None, None, None)
+                return
+
+            # Read latest version
+            latest_version = version_file.read_text().strip()
+
+            # Read release notes if available
+            release_notes = ""
+            if notes_file.exists():
+                release_notes = notes_file.read_text().strip()
+
+            # Check if installer exists
+            installer_path = str(installer_file) if installer_file.exists() else None
+
+            if is_newer_version(latest_version, current_version):
+                callback(True, latest_version, installer_path, release_notes)
+            else:
+                callback(False, None, None, None)
+
+        except Exception:
+            # Silently fail - update check is non-critical
+            callback(False, None, None, None)
+
+    thread = threading.Thread(target=do_check, daemon=True)
+    thread.start()
+
+
+def run_installer(installer_path: str):
+    """Run the installer executable."""
+    if installer_path and os.path.exists(installer_path):
+        subprocess.Popen([installer_path], shell=True)
 
 
 def check_for_updates(github_repo: str, current_version: str, callback: callable):
@@ -155,18 +214,28 @@ def show_update_dialog(parent, latest_version: str, download_url: str, release_n
     )
     later_btn.pack(side="left", pady=10)
 
-    def do_download():
-        open_download_page(download_url)
+    def do_update():
+        # Check if it's a local path or URL
+        if download_url and os.path.exists(download_url):
+            # Local installer - run it directly
+            run_installer(download_url)
+        elif download_url:
+            # URL - open in browser
+            open_download_page(download_url)
         dialog.destroy()
 
-    download_btn = ctk.CTkButton(
+    # Button text depends on whether it's a local installer
+    is_local = download_url and os.path.exists(download_url)
+    btn_text = "Install Update" if is_local else "Download Update"
+
+    update_btn = ctk.CTkButton(
         button_frame,
-        text="Download Update",
+        text=btn_text,
         width=180,
         height=45,
         font=ctk.CTkFont(size=15),
         fg_color="#28a745",
         hover_color="#218838",
-        command=do_download
+        command=do_update
     )
-    download_btn.pack(side="right", pady=10)
+    update_btn.pack(side="right", pady=10)
