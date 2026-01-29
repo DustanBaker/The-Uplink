@@ -304,6 +304,9 @@ Start-Sleep -Seconds 3
         serial_entry = ctk.CTkEntry(serial_frame, width=180, font=ctk.CTkFont(size=14))
         serial_entry.pack()
         self.project_widgets[project]['serial_entry'] = serial_entry
+        # Add serial number lookup for Halo
+        if project == "halo":
+            serial_entry.bind("<KeyRelease>", lambda e, p=project: self._on_halo_serial_keyrelease(e, p))
 
         # LPN
         lpn_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
@@ -856,6 +859,36 @@ Start-Sleep -Seconds 3
         if error:
             self._play_error_sound()
 
+    def _on_halo_serial_keyrelease(self, event, project: str = "halo"):
+        """Handle serial number lookup for Halo when exactly 12 characters entered."""
+        serial = self.project_widgets[project]['serial_entry'].get().strip()
+
+        # Only lookup if exactly 12 characters
+        if len(serial) == 12:
+            po_number = lookup_halo_po_number(serial)
+            if po_number:
+                self._show_user_status(f"PO #: {po_number}", project, error=False)
+            else:
+                self._show_user_status("Serial not found in lookup", project, error=True)
+        else:
+            # Clear status if not 12 chars
+            self.project_widgets[project]['status_label'].configure(text="")
+
+    def _on_halo_admin_serial_keyrelease(self, event, project: str = "halo"):
+        """Handle serial number lookup for Halo in admin view when exactly 12 characters entered."""
+        serial = self.admin_project_widgets[project]['serial_entry'].get().strip()
+
+        # Only lookup if exactly 12 characters
+        if len(serial) == 12:
+            po_number = lookup_halo_po_number(serial)
+            if po_number:
+                self._show_admin_status(f"PO #: {po_number}", project, error=False)
+            else:
+                self._show_admin_status("Serial not found in lookup", project, error=True)
+        else:
+            # Clear status if not 12 chars
+            self.admin_project_widgets[project]['status_label'].configure(text="")
+
     def _handle_export_inventory(self, project: str = "ecoflow"):
         """Handle export and archive of inventory."""
         items = get_all_inventory(project)
@@ -1219,6 +1252,10 @@ Start-Sleep -Seconds 3
         admin_serial_entry = ctk.CTkEntry(serial_frame, width=150, font=ctk.CTkFont(size=13))
         admin_serial_entry.pack()
         self.admin_project_widgets[project]['serial_entry'] = admin_serial_entry
+
+        # Add serial number lookup for Halo in admin view
+        if project == "halo":
+            admin_serial_entry.bind("<KeyRelease>", lambda e, p=project: self._on_halo_admin_serial_keyrelease(e, p))
 
         # LPN
         lpn_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
