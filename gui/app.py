@@ -11,7 +11,8 @@ from database import (
     create_user, get_all_users, update_user_password, update_user_admin_status, delete_user,
     add_inventory_item, get_all_inventory, update_inventory_item, delete_inventory_item,
     move_inventory_to_imported, export_inventory_to_csv, get_all_imported_inventory,
-    lookup_halo_po_number
+    lookup_halo_po_number,
+    get_email_settings, update_email_settings
 )
 from database.sku_cache import (
     add_sku_cached as add_sku,
@@ -26,7 +27,7 @@ from database.sku_cache import (
     start_background_sync,
     stop_background_sync
 )
-from utils import hash_password, get_gui_resource, check_for_updates, show_update_dialog
+from utils import hash_password, get_gui_resource, check_for_updates, show_update_dialog, send_csv_email, test_email_connection
 from config import VERSION, GITHUB_REPO
 
 
@@ -887,9 +888,28 @@ Start-Sleep -Seconds 3
         moved_items = move_inventory_to_imported(project)
 
         if export_inventory_to_csv(moved_items, filepath, project):
-            self._show_user_status(f"Exported {len(moved_items)} items and archived", project, error=False)
             self._refresh_inventory_list(project)
             self._play_success_sound()
+
+            # Send email if enabled
+            email_settings = get_email_settings()
+            if email_settings["enabled"] and email_settings["sender_email"] and email_settings["recipients"]:
+                success, msg = send_csv_email(
+                    smtp_server=email_settings["smtp_server"],
+                    smtp_port=email_settings["smtp_port"],
+                    sender_email=email_settings["sender_email"],
+                    sender_password=email_settings["sender_password"],
+                    recipients=email_settings["recipients"],
+                    csv_filepath=filepath,
+                    project=project,
+                    item_count=len(moved_items)
+                )
+                if success:
+                    self._show_user_status(f"Exported {len(moved_items)} items and emailed", project, error=False)
+                else:
+                    self._show_user_status(f"Exported but email failed: {msg}", project, error=True)
+            else:
+                self._show_user_status(f"Exported {len(moved_items)} items and archived", project, error=False)
         else:
             self._show_user_status("Failed to export CSV", project, error=True)
 
@@ -903,11 +923,13 @@ Start-Sleep -Seconds 3
         tabview.add("Users")
         tabview.add("Approved SKUs")
         tabview.add("Inventory")
+        tabview.add("Email Settings")
 
         # Create content for each tab
         self._create_users_tab(tabview.tab("Users"))
         self._create_skus_tab(tabview.tab("Approved SKUs"))
         self._create_inventory_tab(tabview.tab("Inventory"))
+        self._create_email_settings_tab(tabview.tab("Email Settings"))
 
     def _create_users_tab(self, parent):
         """Create the users management tab."""
@@ -1339,6 +1361,165 @@ Start-Sleep -Seconds 3
 
         self._refresh_admin_archived_inventory(project)
 
+    def _create_email_settings_tab(self, parent):
+        """Create the email settings configuration tab."""
+        # Main container
+        container = ctk.CTkFrame(parent)
+        container.pack(expand=True, fill="both", padx=20, pady=20)
+
+        # Title
+        title = ctk.CTkLabel(
+            container,
+            text="Email Settings",
+            font=ctk.CTkFont(size=20, weight="bold")
+        )
+        title.pack(pady=(0, 20))
+
+        # Load current settings
+        settings = get_email_settings()
+
+        # Settings form
+        form_frame = ctk.CTkFrame(container)
+        form_frame.pack(fill="x", padx=20, pady=10)
+
+        # Enable/Disable toggle
+        enable_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
+        enable_frame.pack(fill="x", pady=10, padx=15)
+        ctk.CTkLabel(enable_frame, text="Enable Email on Export:", font=ctk.CTkFont(size=14)).pack(side="left")
+        self.email_enabled_var = ctk.BooleanVar(value=settings["enabled"])
+        email_toggle = ctk.CTkSwitch(enable_frame, text="", variable=self.email_enabled_var)
+        email_toggle.pack(side="left", padx=10)
+
+        # SMTP Server
+        server_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
+        server_frame.pack(fill="x", pady=5, padx=15)
+        ctk.CTkLabel(server_frame, text="SMTP Server:", font=ctk.CTkFont(size=14), width=120, anchor="w").pack(side="left")
+        self.smtp_server_entry = ctk.CTkEntry(server_frame, width=300, font=ctk.CTkFont(size=14))
+        self.smtp_server_entry.insert(0, settings["smtp_server"])
+        self.smtp_server_entry.pack(side="left", padx=10)
+
+        # SMTP Port
+        port_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
+        port_frame.pack(fill="x", pady=5, padx=15)
+        ctk.CTkLabel(port_frame, text="SMTP Port:", font=ctk.CTkFont(size=14), width=120, anchor="w").pack(side="left")
+        self.smtp_port_entry = ctk.CTkEntry(port_frame, width=100, font=ctk.CTkFont(size=14))
+        self.smtp_port_entry.insert(0, str(settings["smtp_port"]))
+        self.smtp_port_entry.pack(side="left", padx=10)
+
+        # Sender Email
+        sender_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
+        sender_frame.pack(fill="x", pady=5, padx=15)
+        ctk.CTkLabel(sender_frame, text="Sender Email:", font=ctk.CTkFont(size=14), width=120, anchor="w").pack(side="left")
+        self.sender_email_entry = ctk.CTkEntry(sender_frame, width=300, font=ctk.CTkFont(size=14))
+        self.sender_email_entry.insert(0, settings["sender_email"])
+        self.sender_email_entry.pack(side="left", padx=10)
+
+        # Sender Password
+        password_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
+        password_frame.pack(fill="x", pady=5, padx=15)
+        ctk.CTkLabel(password_frame, text="Password:", font=ctk.CTkFont(size=14), width=120, anchor="w").pack(side="left")
+        self.sender_password_entry = ctk.CTkEntry(password_frame, width=300, font=ctk.CTkFont(size=14), show="*")
+        self.sender_password_entry.insert(0, settings["sender_password"])
+        self.sender_password_entry.pack(side="left", padx=10)
+
+        # Recipients
+        recipients_frame = ctk.CTkFrame(form_frame, fg_color="transparent")
+        recipients_frame.pack(fill="x", pady=5, padx=15)
+        ctk.CTkLabel(recipients_frame, text="Recipients:", font=ctk.CTkFont(size=14), width=120, anchor="w").pack(side="left")
+        self.recipients_entry = ctk.CTkEntry(recipients_frame, width=400, font=ctk.CTkFont(size=14))
+        self.recipients_entry.insert(0, settings["recipients"])
+        self.recipients_entry.pack(side="left", padx=10)
+
+        # Help text
+        help_label = ctk.CTkLabel(
+            form_frame,
+            text="Separate multiple recipients with commas",
+            font=ctk.CTkFont(size=12),
+            text_color="gray"
+        )
+        help_label.pack(pady=(0, 10), padx=15, anchor="w")
+
+        # Buttons frame
+        buttons_frame = ctk.CTkFrame(container, fg_color="transparent")
+        buttons_frame.pack(fill="x", pady=20, padx=20)
+
+        # Test Connection button
+        test_btn = ctk.CTkButton(
+            buttons_frame,
+            text="Test Connection",
+            width=150,
+            font=ctk.CTkFont(size=14),
+            command=self._test_email_connection
+        )
+        test_btn.pack(side="left", padx=(0, 10))
+
+        # Save button
+        save_btn = ctk.CTkButton(
+            buttons_frame,
+            text="Save Settings",
+            width=150,
+            font=ctk.CTkFont(size=14),
+            fg_color="#28a745",
+            hover_color="#218838",
+            command=self._save_email_settings
+        )
+        save_btn.pack(side="left")
+
+        # Status label
+        self.email_status_label = ctk.CTkLabel(
+            container,
+            text="",
+            font=ctk.CTkFont(size=14)
+        )
+        self.email_status_label.pack(pady=10)
+
+    def _test_email_connection(self):
+        """Test the SMTP connection with current settings."""
+        smtp_server = self.smtp_server_entry.get().strip()
+        try:
+            smtp_port = int(self.smtp_port_entry.get().strip())
+        except ValueError:
+            self.email_status_label.configure(text="Invalid port number", text_color="red")
+            return
+
+        sender_email = self.sender_email_entry.get().strip()
+        sender_password = self.sender_password_entry.get()
+
+        if not all([smtp_server, sender_email, sender_password]):
+            self.email_status_label.configure(text="Please fill in all fields", text_color="red")
+            return
+
+        self.email_status_label.configure(text="Testing connection...", text_color="gray")
+        self.update()
+
+        success, message = test_email_connection(smtp_server, smtp_port, sender_email, sender_password)
+        color = "green" if success else "red"
+        self.email_status_label.configure(text=message, text_color=color)
+
+    def _save_email_settings(self):
+        """Save email settings to the database."""
+        smtp_server = self.smtp_server_entry.get().strip()
+        try:
+            smtp_port = int(self.smtp_port_entry.get().strip())
+        except ValueError:
+            self.email_status_label.configure(text="Invalid port number", text_color="red")
+            return
+
+        sender_email = self.sender_email_entry.get().strip()
+        sender_password = self.sender_password_entry.get()
+        recipients = self.recipients_entry.get().strip()
+        enabled = self.email_enabled_var.get()
+
+        update_email_settings(
+            smtp_server=smtp_server,
+            smtp_port=smtp_port,
+            sender_email=sender_email,
+            sender_password=sender_password,
+            recipients=recipients,
+            enabled=enabled
+        )
+        self.email_status_label.configure(text="Settings saved", text_color="green")
+
     def _refresh_admin_active_inventory(self, project: str = "ecoflow"):
         """Refresh the admin active inventory list for a specific project."""
         admin_active_inventory_frame = self.admin_project_widgets[project]['active_inventory_frame']
@@ -1661,13 +1842,33 @@ Start-Sleep -Seconds 3
             self._refresh_admin_active_inventory(project)
             self._refresh_admin_archived_inventory(project)
             self._play_success_sound()
+
+            # Send email if enabled
+            email_msg = ""
+            email_settings = get_email_settings()
+            if email_settings["enabled"] and email_settings["sender_email"] and email_settings["recipients"]:
+                success, msg = send_csv_email(
+                    smtp_server=email_settings["smtp_server"],
+                    smtp_port=email_settings["smtp_port"],
+                    sender_email=email_settings["sender_email"],
+                    sender_password=email_settings["sender_password"],
+                    recipients=email_settings["recipients"],
+                    csv_filepath=filepath,
+                    project=project,
+                    item_count=len(moved_items)
+                )
+                if success:
+                    email_msg = "\nEmail sent successfully"
+                else:
+                    email_msg = f"\nEmail failed: {msg}"
+
             # Show success dialog
             dialog = ctk.CTkToplevel(self)
             dialog.title("Export Complete")
-            dialog.geometry("300x100")
+            dialog.geometry("350x120")
             dialog.resizable(False, False)
             dialog.transient(self)
-            ctk.CTkLabel(dialog, text=f"Exported {len(moved_items)} items", font=ctk.CTkFont(size=14)).pack(pady=20)
+            ctk.CTkLabel(dialog, text=f"Exported {len(moved_items)} items{email_msg}", font=ctk.CTkFont(size=14)).pack(pady=20)
             ctk.CTkButton(dialog, text="OK", width=80, command=dialog.destroy).pack()
             dialog.wait_visibility()
             dialog.grab_set()

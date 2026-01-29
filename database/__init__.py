@@ -15,6 +15,9 @@ from .db import (
     is_valid_sku,
     get_sku_count,
     clear_all_skus,
+    # Email settings functions
+    get_email_settings,
+    update_email_settings,
 )
 from .inventory import (
     init_inventory_db,

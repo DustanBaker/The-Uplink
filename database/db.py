@@ -115,6 +115,23 @@ def init_db():
         CREATE INDEX IF NOT EXISTS idx_sku_project ON approved_skus(sku, project)
     """)
 
+    # Email settings table
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS email_settings (
+            id INTEGER PRIMARY KEY CHECK (id = 1),
+            smtp_server TEXT DEFAULT 'smtp.office365.com',
+            smtp_port INTEGER DEFAULT 587,
+            sender_email TEXT,
+            sender_password TEXT,
+            recipients TEXT,
+            enabled INTEGER DEFAULT 0
+        )
+    """)
+    # Ensure a single row exists
+    cursor.execute("""
+        INSERT OR IGNORE INTO email_settings (id) VALUES (1)
+    """)
+
     conn.commit()
     conn.close()
 
@@ -392,3 +409,63 @@ def clear_all_skus(project: str = "ecoflow") -> int:
     affected = cursor.rowcount
     conn.close()
     return affected
+
+
+# ==================== Email Settings Functions ====================
+
+@with_retry
+def get_email_settings() -> dict:
+    """Get email settings from the database."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        SELECT smtp_server, smtp_port, sender_email, sender_password, recipients, enabled
+        FROM email_settings WHERE id = 1
+    """)
+    row = cursor.fetchone()
+    conn.close()
+
+    if row:
+        return {
+            "smtp_server": row[0] or "smtp.office365.com",
+            "smtp_port": row[1] or 587,
+            "sender_email": row[2] or "",
+            "sender_password": row[3] or "",
+            "recipients": row[4] or "",
+            "enabled": bool(row[5])
+        }
+    return {
+        "smtp_server": "smtp.office365.com",
+        "smtp_port": 587,
+        "sender_email": "",
+        "sender_password": "",
+        "recipients": "",
+        "enabled": False
+    }
+
+
+@with_retry
+def update_email_settings(
+    smtp_server: str,
+    smtp_port: int,
+    sender_email: str,
+    sender_password: str,
+    recipients: str,
+    enabled: bool
+) -> bool:
+    """Update email settings in the database."""
+    conn = get_connection()
+    cursor = conn.cursor()
+    cursor.execute("""
+        UPDATE email_settings SET
+            smtp_server = ?,
+            smtp_port = ?,
+            sender_email = ?,
+            sender_password = ?,
+            recipients = ?,
+            enabled = ?
+        WHERE id = 1
+    """, (smtp_server, smtp_port, sender_email, sender_password, recipients, 1 if enabled else 0))
+    conn.commit()
+    conn.close()
+    return True
