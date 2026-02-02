@@ -584,9 +584,9 @@ Start-Sleep -Seconds 3
                 self._play_error_sound()
                 return
 
-            # Validate LPN: must be exactly 11 digits
-            if not lpn.isdigit() or len(lpn) != 11:
-                status_label.configure(text="LPN must be exactly 11 digits (numbers only)")
+            # Validate LPN: must be exactly 11 alphanumeric characters
+            if not lpn.isalnum() or len(lpn) != 11:
+                status_label.configure(text="LPN must be exactly 11 alphanumeric characters")
                 self._play_error_sound()
                 return
 
@@ -814,9 +814,9 @@ Start-Sleep -Seconds 3
             self._show_user_status("LPN is required", project, error=True)
             return
 
-        # Validate LPN: must be exactly 11 digits
-        if not lpn.isdigit() or len(lpn) != 11:
-            self._show_user_status("LPN must be exactly 11 digits (numbers only)", project, error=True)
+        # Validate LPN: must be exactly 11 alphanumeric characters
+        if not lpn.isalnum() or len(lpn) != 11:
+            self._show_user_status("LPN must be exactly 11 alphanumeric characters", project, error=True)
             return
 
         # Save to inventory database
@@ -1747,9 +1747,9 @@ Start-Sleep -Seconds 3
                 self._play_error_sound()
                 return
 
-            # Validate LPN: must be exactly 11 digits
-            if not lpn.isdigit() or len(lpn) != 11:
-                status_label.configure(text="LPN must be exactly 11 digits", text_color="red")
+            # Validate LPN: must be exactly 11 alphanumeric characters
+            if not lpn.isalnum() or len(lpn) != 11:
+                status_label.configure(text="LPN must be exactly 11 alphanumeric characters", text_color="red")
                 self._play_error_sound()
                 return
 
@@ -2044,9 +2044,9 @@ Start-Sleep -Seconds 3
             self._show_admin_status("LPN is required", project, error=True)
             return
 
-        # Validate LPN: must be exactly 11 digits
-        if not lpn.isdigit() or len(lpn) != 11:
-            self._show_admin_status("LPN must be exactly 11 digits (numbers only)", project, error=True)
+        # Validate LPN: must be exactly 11 alphanumeric characters
+        if not lpn.isalnum() or len(lpn) != 11:
+            self._show_admin_status("LPN must be exactly 11 alphanumeric characters", project, error=True)
             return
 
         # Save to inventory database
