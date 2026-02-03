@@ -1,5 +1,6 @@
 import sqlite3
 import time
+import threading
 from datetime import datetime
 from functools import wraps
 
@@ -7,6 +8,12 @@ import sys
 from pathlib import Path
 sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import get_db_path, DB_TIMEOUT, DB_RETRY_ATTEMPTS, DB_RETRY_DELAY
+
+# ==================== Halo SN Lookup Cache ====================
+# In-memory cache for Halo PO number lookups to reduce network traffic
+_halo_sn_cache = {}  # {serial_number: po_number}
+_halo_sn_cache_loaded = False
+_halo_sn_cache_lock = threading.Lock()
 
 
 def get_inventory_db_path(project: str = "ecoflow") -> Path:
@@ -482,31 +489,67 @@ def import_halo_sn_lookup_csv(csv_path: str) -> int:
 
     conn.commit()
     conn.close()
+
+    # Refresh the in-memory cache after import
+    refresh_halo_sn_cache()
+
     return count
 
 
-@with_retry
+def _load_halo_sn_cache():
+    """Load all Halo SN lookups into memory cache (called once at startup)."""
+    global _halo_sn_cache, _halo_sn_cache_loaded
+
+    with _halo_sn_cache_lock:
+        if _halo_sn_cache_loaded:
+            return
+
+        try:
+            init_halo_sn_lookup_db()
+            conn = get_sn_lookup_connection()
+            cursor = conn.cursor()
+            cursor.execute("SELECT serial_number, po_number FROM sn_lookup")
+            rows = cursor.fetchall()
+            conn.close()
+
+            _halo_sn_cache = {row[0]: row[1] for row in rows}
+            _halo_sn_cache_loaded = True
+        except Exception:
+            pass  # Cache remains empty, will fall back to direct lookup
+
+
+def refresh_halo_sn_cache():
+    """Force refresh of the Halo SN cache from database."""
+    global _halo_sn_cache_loaded
+    with _halo_sn_cache_lock:
+        _halo_sn_cache_loaded = False
+    _load_halo_sn_cache()
+
+
 def lookup_halo_po_number(serial_number: str) -> str:
     """Look up PO number for a Halo serial number.
 
+    Uses in-memory cache to avoid network calls.
     Returns the PO number if found, empty string otherwise.
     """
-    init_halo_sn_lookup_db()
+    # Load cache if not loaded
+    if not _halo_sn_cache_loaded:
+        _load_halo_sn_cache()
 
-    conn = get_sn_lookup_connection()
-    cursor = conn.cursor()
-    cursor.execute("SELECT po_number FROM sn_lookup WHERE serial_number = ?", (serial_number,))
-    row = cursor.fetchone()
-    conn.close()
-
-    return row[0] if row else ''
+    # Use cache lookup (instant, no network)
+    with _halo_sn_cache_lock:
+        return _halo_sn_cache.get(serial_number, '')
 
 
 @with_retry
 def get_halo_sn_lookup_count() -> int:
     """Get the number of records in the Halo SN lookup table."""
-    init_halo_sn_lookup_db()
+    # Use cache if available
+    if _halo_sn_cache_loaded:
+        with _halo_sn_cache_lock:
+            return len(_halo_sn_cache)
 
+    init_halo_sn_lookup_db()
     conn = get_sn_lookup_connection()
     cursor = conn.cursor()
     cursor.execute("SELECT COUNT(*) FROM sn_lookup")

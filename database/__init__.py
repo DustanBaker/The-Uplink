@@ -34,4 +34,5 @@ from .inventory import (
     import_halo_sn_lookup_csv,
     lookup_halo_po_number,
     get_halo_sn_lookup_count,
+    refresh_halo_sn_cache,
 )

@@ -70,13 +70,23 @@ class MainApplication(ctk.CTk):
             except Exception:
                 pass  # Icon setting failed, continue without icon
 
-        # Initialize SKU cache and start background sync
-        init_sku_cache()
-        start_background_sync(interval=300)  # 5 minutes
-
+        # Create widgets first so GUI displays immediately
         self._create_widgets()
+
+        # Defer all network operations until after GUI is displayed
+        self.after(50, self._deferred_init)
+
+    def _deferred_init(self):
+        """Initialize network-dependent features after GUI is displayed."""
+        # Initialize SKU cache and start background sync (30 min to reduce bandwidth)
+        init_sku_cache()
+        start_background_sync(interval=1800)  # 30 minutes
+
+        # Play login sound
         self._play_login_sound()
-        self._check_for_updates()
+
+        # Check for updates only once at startup (no repeat checks)
+        self.after(2000, self._check_for_updates)
 
     def _play_sound(self, filename, volume=150):
         """Play a sound file in background thread with cross-platform support."""
@@ -259,7 +269,8 @@ Start-Sleep -Seconds 3
         self._create_project_tab(tabview.tab("EcoFlow"), "ecoflow")
         self._create_project_tab(tabview.tab("Halo"), "halo")
 
-        self._start_inventory_polling()
+        # Defer inventory loading until after GUI is displayed
+        self.after(100, self._start_inventory_polling)
 
     def _create_project_tab(self, parent, project: str):
         """Create the project-specific tab content with form and inventory list."""
@@ -388,6 +399,15 @@ Start-Sleep -Seconds 3
         )
         list_title.pack(side="left")
 
+        # Quantity counter
+        qty_label = ctk.CTkLabel(
+            list_header,
+            text="(0 items)",
+            font=ctk.CTkFont(size=14)
+        )
+        qty_label.pack(side="left", padx=(10, 0))
+        self.project_widgets[project]['inventory_qty_label'] = qty_label
+
         export_button = ctk.CTkButton(
             list_header,
             text="Export & Archive",
@@ -419,7 +439,8 @@ Start-Sleep -Seconds 3
         """Poll and refresh inventory for all projects, then schedule next poll."""
         for project in self.project_widgets:
             self._refresh_inventory_list(project)
-        self._refresh_poll_id = self.after(10000, self._poll_inventory)
+        # Only poll every 5 minutes to reduce network traffic (was 10 seconds)
+        self._refresh_poll_id = self.after(300000, self._poll_inventory)
 
     def _stop_inventory_polling(self):
         """Stop the inventory polling."""
@@ -445,8 +466,44 @@ Start-Sleep -Seconds 3
             )
             label.grid(row=0, column=col, padx=5, pady=(0, 10), sticky="w")
 
+        # Show loading message
+        loading_label = ctk.CTkLabel(inventory_list_frame, text="Loading...", font=ctk.CTkFont(size=14))
+        loading_label.grid(row=1, column=0, columnspan=10, padx=5, pady=10)
+
+        # Fetch data in background thread
+        def fetch_data():
+            items = get_all_inventory(project)[:20]  # Limit to 20 items
+            # Pre-fetch PO numbers for Halo items
+            for item in items:
+                if project == "halo":
+                    item['_po_number'] = lookup_halo_po_number(item['serial_number']) or '0'
+                else:
+                    item['_po_number'] = item.get('order_number', '')
+            # Update GUI on main thread
+            self.after(0, lambda: self._populate_inventory_list(project, items))
+
+        thread = threading.Thread(target=fetch_data, daemon=True)
+        thread.start()
+
+    def _populate_inventory_list(self, project: str, items: list):
+        """Populate inventory list with fetched data (called on main thread)."""
+        inventory_list_frame = self.project_widgets[project]['inventory_list_frame']
+
+        # Clear existing widgets (including loading message)
+        for widget in inventory_list_frame.winfo_children():
+            widget.destroy()
+
+        # Header row
+        headers = ["SKU", "Serial Number", "LPN", "PO #", "Location", "Repair State", "Entered By", "Date", "", ""]
+        for col, header in enumerate(headers):
+            label = ctk.CTkLabel(
+                inventory_list_frame,
+                text=header,
+                font=ctk.CTkFont(size=14, weight="bold")
+            )
+            label.grid(row=0, column=col, padx=5, pady=(0, 10), sticky="w")
+
         # Inventory rows
-        items = get_all_inventory(project)
         for row, item in enumerate(items, start=1):
             col = 0
             ctk.CTkLabel(inventory_list_frame, text=item['item_sku'], font=ctk.CTkFont(size=14)).grid(
@@ -458,12 +515,7 @@ Start-Sleep -Seconds 3
             ctk.CTkLabel(inventory_list_frame, text=item['lpn'], font=ctk.CTkFont(size=14)).grid(
                 row=row, column=col, padx=5, pady=3, sticky="w")
             col += 1
-            # PO # column - EcoFlow uses order_number, Halo uses SN lookup
-            if project == "halo":
-                po_number = lookup_halo_po_number(item['serial_number']) or '0'
-            else:
-                po_number = item.get('order_number', '')
-            ctk.CTkLabel(inventory_list_frame, text=po_number, font=ctk.CTkFont(size=14)).grid(
+            ctk.CTkLabel(inventory_list_frame, text=item['_po_number'], font=ctk.CTkFont(size=14)).grid(
                 row=row, column=col, padx=5, pady=3, sticky="w")
             col += 1
             ctk.CTkLabel(inventory_list_frame, text=item.get('location', ''), font=ctk.CTkFont(size=14)).grid(
@@ -505,6 +557,9 @@ Start-Sleep -Seconds 3
                 command=lambda i=item, p=project: self._delete_inventory_item(i, p)
             )
             delete_btn.grid(row=row, column=col, padx=2, pady=3)
+
+        # Update quantity counter
+        self.project_widgets[project]['inventory_qty_label'].configure(text=f"({len(items)} items)")
 
     def _show_edit_inventory_dialog(self, item: dict, project: str = "ecoflow"):
         """Show dialog to edit an inventory item."""
@@ -1043,7 +1098,8 @@ Start-Sleep -Seconds 3
         self.user_list_frame.grid_columnconfigure(3, weight=0)
         self.user_list_frame.grid_columnconfigure(4, weight=0)
 
-        self._refresh_user_list()
+        # Defer user list loading until after GUI is displayed
+        self.after(100, self._refresh_user_list)
 
     def _create_skus_tab(self, parent):
         """Create the SKU management tab with project sub-tabs."""
@@ -1085,11 +1141,14 @@ Start-Sleep -Seconds 3
 
         sku_count_label = ctk.CTkLabel(
             stats_frame,
-            text=f"Total SKUs: {get_sku_count(project)}",
+            text="Total SKUs: Loading...",
             font=ctk.CTkFont(size=14)
         )
         sku_count_label.pack(pady=(0, 10))
         self.admin_sku_widgets[project]['sku_count_label'] = sku_count_label
+
+        # Defer SKU count loading until after GUI is displayed
+        self.after(200, lambda p=project: self._update_sku_count_label(p))
 
         # Import section
         import_title = ctk.CTkLabel(
@@ -1183,7 +1242,8 @@ Start-Sleep -Seconds 3
         sku_list_frame.grid_columnconfigure(1, weight=2)
         sku_list_frame.grid_columnconfigure(2, weight=0)
 
-        self._refresh_sku_list(project=project)
+        # Defer SKU list loading until after GUI is displayed
+        self.after(150, lambda p=project: self._refresh_sku_list(project=p))
 
     def _create_inventory_tab(self, parent):
         """Create the inventory viewing tab for admin with project tabs."""
@@ -1333,6 +1393,15 @@ Start-Sleep -Seconds 3
         )
         title.pack(side="left")
 
+        # Quantity counter
+        admin_active_qty_label = ctk.CTkLabel(
+            header_frame,
+            text="(0 items)",
+            font=ctk.CTkFont(size=13)
+        )
+        admin_active_qty_label.pack(side="left", padx=(10, 0))
+        self.admin_project_widgets[project]['active_inventory_qty_label'] = admin_active_qty_label
+
         refresh_btn = ctk.CTkButton(
             header_frame,
             text="Refresh",
@@ -1363,7 +1432,8 @@ Start-Sleep -Seconds 3
         for i in range(num_columns):
             admin_active_inventory_frame.grid_columnconfigure(i, weight=1)
 
-        self._refresh_admin_active_inventory(project)
+        # Defer inventory loading until after GUI is displayed
+        self.after(100, lambda p=project: self._refresh_admin_active_inventory(p))
 
     def _create_archived_inventory_view(self, parent, project: str = "ecoflow"):
         """Create the archived inventory view for a specific project."""
@@ -1377,6 +1447,15 @@ Start-Sleep -Seconds 3
             font=ctk.CTkFont(size=18, weight="bold")
         )
         title.pack(side="left")
+
+        # Quantity counter
+        admin_archived_qty_label = ctk.CTkLabel(
+            header_frame,
+            text="(0 items)",
+            font=ctk.CTkFont(size=14)
+        )
+        admin_archived_qty_label.pack(side="left", padx=(10, 0))
+        self.admin_project_widgets[project]['archived_qty_label'] = admin_archived_qty_label
 
         refresh_btn = ctk.CTkButton(
             header_frame,
@@ -1397,7 +1476,8 @@ Start-Sleep -Seconds 3
         for i in range(num_columns):
             admin_archived_inventory_frame.grid_columnconfigure(i, weight=1)
 
-        self._refresh_admin_archived_inventory(project)
+        # Defer inventory loading until after GUI is displayed
+        self.after(100, lambda p=project: self._refresh_admin_archived_inventory(p))
 
     def _create_email_settings_tab(self, parent):
         """Create the email settings configuration tab."""
@@ -1564,7 +1644,7 @@ Start-Sleep -Seconds 3
         for widget in admin_active_inventory_frame.winfo_children():
             widget.destroy()
 
-        # Header row - include PO # for both projects (between LPN and Repair State)
+        # Header row
         headers = ["SKU", "Serial Number", "LPN", "PO #", "Repair State", "Entered By", "Date", "Actions"]
         for col, header in enumerate(headers):
             label = ctk.CTkLabel(
@@ -1574,8 +1654,39 @@ Start-Sleep -Seconds 3
             )
             label.grid(row=0, column=col, padx=5, pady=(0, 10), sticky="w")
 
-        # Inventory rows
-        items = get_all_inventory(project)
+        # Show loading message
+        loading_label = ctk.CTkLabel(admin_active_inventory_frame, text="Loading...", font=ctk.CTkFont(size=13))
+        loading_label.grid(row=1, column=0, columnspan=8, padx=5, pady=10)
+
+        # Fetch data in background thread
+        def fetch_data():
+            items = get_all_inventory(project)[:20]  # Limit to 20 items
+            for item in items:
+                if project == "halo":
+                    item['_po_number'] = lookup_halo_po_number(item['serial_number']) or '0'
+                else:
+                    item['_po_number'] = item.get('order_number', '')
+            self.after(0, lambda: self._populate_admin_active_inventory(project, items))
+
+        thread = threading.Thread(target=fetch_data, daemon=True)
+        thread.start()
+
+    def _populate_admin_active_inventory(self, project: str, items: list):
+        """Populate admin active inventory with fetched data."""
+        admin_active_inventory_frame = self.admin_project_widgets[project]['active_inventory_frame']
+        for widget in admin_active_inventory_frame.winfo_children():
+            widget.destroy()
+
+        # Header row
+        headers = ["SKU", "Serial Number", "LPN", "PO #", "Repair State", "Entered By", "Date", "Actions"]
+        for col, header in enumerate(headers):
+            label = ctk.CTkLabel(
+                admin_active_inventory_frame,
+                text=header,
+                font=ctk.CTkFont(size=14, weight="bold")
+            )
+            label.grid(row=0, column=col, padx=5, pady=(0, 10), sticky="w")
+
         for row, item in enumerate(items, start=1):
             col = 0
             ctk.CTkLabel(admin_active_inventory_frame, text=item['item_sku'], font=ctk.CTkFont(size=13)).grid(
@@ -1587,12 +1698,7 @@ Start-Sleep -Seconds 3
             ctk.CTkLabel(admin_active_inventory_frame, text=item['lpn'], font=ctk.CTkFont(size=13)).grid(
                 row=row, column=col, padx=5, pady=3, sticky="w")
             col += 1
-            # PO # column - EcoFlow uses order_number, Halo uses SN lookup
-            if project == "halo":
-                po_number = lookup_halo_po_number(item['serial_number']) or '0'
-            else:
-                po_number = item.get('order_number', '')
-            ctk.CTkLabel(admin_active_inventory_frame, text=po_number, font=ctk.CTkFont(size=13)).grid(
+            ctk.CTkLabel(admin_active_inventory_frame, text=item['_po_number'], font=ctk.CTkFont(size=13)).grid(
                 row=row, column=col, padx=5, pady=3, sticky="w")
             col += 1
             ctk.CTkLabel(admin_active_inventory_frame, text=item['repair_state'], font=ctk.CTkFont(size=13)).grid(
@@ -1606,7 +1712,6 @@ Start-Sleep -Seconds 3
                 row=row, column=col, padx=5, pady=3, sticky="w")
             col += 1
 
-            # Action buttons frame
             action_frame = ctk.CTkFrame(admin_active_inventory_frame, fg_color="transparent")
             action_frame.grid(row=row, column=col, padx=2, pady=3, sticky="w")
 
@@ -1632,13 +1737,16 @@ Start-Sleep -Seconds 3
             )
             delete_btn.pack(side="left")
 
+        # Update quantity counter
+        self.admin_project_widgets[project]['active_inventory_qty_label'].configure(text=f"({len(items)} items)")
+
     def _refresh_admin_archived_inventory(self, project: str = "ecoflow"):
         """Refresh the admin archived inventory list for a specific project."""
         admin_archived_inventory_frame = self.admin_project_widgets[project]['archived_inventory_frame']
         for widget in admin_archived_inventory_frame.winfo_children():
             widget.destroy()
 
-        # Header row - include PO # for both projects (between LPN and Repair State)
+        # Header row
         headers = ["SKU", "Serial Number", "LPN", "PO #", "Repair State", "Entered By", "Created", "Archived"]
         for col, header in enumerate(headers):
             label = ctk.CTkLabel(
@@ -1648,8 +1756,45 @@ Start-Sleep -Seconds 3
             )
             label.grid(row=0, column=col, padx=5, pady=(0, 10), sticky="w")
 
-        # Inventory rows
-        items = get_all_imported_inventory(project)
+        # Show loading message
+        loading_label = ctk.CTkLabel(admin_archived_inventory_frame, text="Loading...", font=ctk.CTkFont(size=13))
+        loading_label.grid(row=1, column=0, columnspan=8, padx=5, pady=10)
+
+        # Fetch data in background thread
+        def fetch_data():
+            items = get_all_imported_inventory(project)[:20]  # Limit to 20 items
+            for item in items:
+                if project == "halo":
+                    item['_po_number'] = lookup_halo_po_number(item['serial_number']) or '0'
+                else:
+                    item['_po_number'] = item.get('order_number', '')
+            self.after(0, lambda: self._populate_admin_archived_inventory(project, items))
+
+        thread = threading.Thread(target=fetch_data, daemon=True)
+        thread.start()
+
+    def _populate_admin_archived_inventory(self, project: str, items: list):
+        """Populate admin archived inventory with fetched data."""
+        admin_archived_inventory_frame = self.admin_project_widgets[project]['archived_inventory_frame']
+        for widget in admin_archived_inventory_frame.winfo_children():
+            widget.destroy()
+
+        # Update quantity counter
+        qty_label = self.admin_project_widgets[project].get('archived_qty_label')
+        if qty_label:
+            count = len(items)
+            qty_label.configure(text=f"({count} item{'s' if count != 1 else ''})")
+
+        # Header row
+        headers = ["SKU", "Serial Number", "LPN", "PO #", "Repair State", "Entered By", "Created", "Archived"]
+        for col, header in enumerate(headers):
+            label = ctk.CTkLabel(
+                admin_archived_inventory_frame,
+                text=header,
+                font=ctk.CTkFont(size=14, weight="bold")
+            )
+            label.grid(row=0, column=col, padx=5, pady=(0, 10), sticky="w")
+
         for row, item in enumerate(items, start=1):
             col = 0
             ctk.CTkLabel(admin_archived_inventory_frame, text=item['item_sku'], font=ctk.CTkFont(size=13)).grid(
@@ -1661,12 +1806,7 @@ Start-Sleep -Seconds 3
             ctk.CTkLabel(admin_archived_inventory_frame, text=item['lpn'], font=ctk.CTkFont(size=13)).grid(
                 row=row, column=col, padx=5, pady=3, sticky="w")
             col += 1
-            # PO # column - EcoFlow uses order_number, Halo uses SN lookup
-            if project == "halo":
-                po_number = lookup_halo_po_number(item['serial_number']) or '0'
-            else:
-                po_number = item.get('order_number', '')
-            ctk.CTkLabel(admin_archived_inventory_frame, text=po_number, font=ctk.CTkFont(size=13)).grid(
+            ctk.CTkLabel(admin_archived_inventory_frame, text=item['_po_number'], font=ctk.CTkFont(size=13)).grid(
                 row=row, column=col, padx=5, pady=3, sticky="w")
             col += 1
             ctk.CTkLabel(admin_archived_inventory_frame, text=item['repair_state'], font=ctk.CTkFont(size=13)).grid(
@@ -2089,6 +2229,14 @@ Start-Sleep -Seconds 3
         if error:
             self._play_error_sound()
 
+    def _update_sku_count_label(self, project: str = "ecoflow"):
+        """Update the SKU count label for a specific project (called after GUI is displayed)."""
+        try:
+            count = get_sku_count(project)
+            self.admin_sku_widgets[project]['sku_count_label'].configure(text=f"Total SKUs: {count}")
+        except Exception:
+            pass  # Ignore errors - label will stay as "Loading..."
+
     def _refresh_sku_list(self, filter_text: str = "", project: str = "ecoflow"):
         """Refresh the SKU list display for a specific project."""
         widgets = self.admin_sku_widgets[project]
@@ -2107,11 +2255,39 @@ Start-Sleep -Seconds 3
             )
             label.grid(row=0, column=col, padx=5, pady=(0, 10), sticky="w")
 
-        # Get SKUs (filtered or all) for this project
-        if filter_text:
-            skus = search_skus(filter_text, limit=100, project=project)
-        else:
-            skus = get_all_skus(project)[:100]  # Limit display to 100 for performance
+        # Show loading message
+        loading_label = ctk.CTkLabel(sku_list_frame, text="Loading...", font=ctk.CTkFont(size=14))
+        loading_label.grid(row=1, column=0, columnspan=3, padx=5, pady=10)
+
+        # Fetch data in background thread
+        def fetch_data():
+            if filter_text:
+                skus = search_skus(filter_text, limit=20, project=project)
+            else:
+                skus = get_all_skus(project)[:20]  # Limit to 20 items
+            count = get_sku_count(project)
+            self.after(0, lambda: self._populate_sku_list(project, skus, count))
+
+        thread = threading.Thread(target=fetch_data, daemon=True)
+        thread.start()
+
+    def _populate_sku_list(self, project: str, skus: list, count: int):
+        """Populate SKU list with fetched data."""
+        widgets = self.admin_sku_widgets[project]
+        sku_list_frame = widgets['sku_list_frame']
+
+        for widget in sku_list_frame.winfo_children():
+            widget.destroy()
+
+        # Header row
+        headers = ["SKU", "Description", ""]
+        for col, header in enumerate(headers):
+            label = ctk.CTkLabel(
+                sku_list_frame,
+                text=header,
+                font=ctk.CTkFont(size=14, weight="bold")
+            )
+            label.grid(row=0, column=col, padx=5, pady=(0, 10), sticky="w")
 
         for row, sku in enumerate(skus, start=1):
             ctk.CTkLabel(sku_list_frame, text=sku['sku'], font=ctk.CTkFont(size=14)).grid(
@@ -2132,7 +2308,7 @@ Start-Sleep -Seconds 3
             delete_btn.grid(row=row, column=2, padx=5, pady=3)
 
         # Update count
-        widgets['sku_count_label'].configure(text=f"Total SKUs: {get_sku_count(project)}")
+        widgets['sku_count_label'].configure(text=f"Total SKUs: {count}")
 
     def _filter_sku_list(self, project: str = "ecoflow"):
         """Filter SKU list based on search entry for a specific project."""
@@ -2285,8 +2461,34 @@ Start-Sleep -Seconds 3
             )
             label.grid(row=0, column=col, padx=5, pady=(0, 10), sticky="w")
 
-        # User rows
-        users = get_all_users()
+        # Show loading message
+        loading_label = ctk.CTkLabel(self.user_list_frame, text="Loading...", font=ctk.CTkFont(size=14))
+        loading_label.grid(row=1, column=0, columnspan=5, padx=5, pady=10)
+
+        # Fetch data in background thread
+        def fetch_data():
+            users = get_all_users()[:20]  # Limit to 20 items
+            self.after(0, lambda: self._populate_user_list(users))
+
+        thread = threading.Thread(target=fetch_data, daemon=True)
+        thread.start()
+
+    def _populate_user_list(self, users: list):
+        """Populate user list with fetched data."""
+        # Clear existing widgets
+        for widget in self.user_list_frame.winfo_children():
+            widget.destroy()
+
+        # Header row
+        headers = ["Username", "Admin", "Created", "", ""]
+        for col, header in enumerate(headers):
+            label = ctk.CTkLabel(
+                self.user_list_frame,
+                text=header,
+                font=ctk.CTkFont(size=14, weight="bold")
+            )
+            label.grid(row=0, column=col, padx=5, pady=(0, 10), sticky="w")
+
         for row, user in enumerate(users, start=1):
             # Username
             username_label = ctk.CTkLabel(self.user_list_frame, text=user['username'], font=ctk.CTkFont(size=14))

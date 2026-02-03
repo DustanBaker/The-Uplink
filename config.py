@@ -4,7 +4,7 @@ import os
 from pathlib import Path
 
 # Application version (update this when releasing new versions)
-VERSION = "1.0.7"
+VERSION = "1.0.8"
 
 # GitHub repository for auto-updates (format: "owner/repo")
 # Set to None to disable GitHub update checking
@@ -57,7 +57,7 @@ DB_RETRY_DELAY = 1  # seconds between retries
 SKU_CACHE_ENABLED = True
 
 # Sync interval in seconds (how often to check remote for updates)
-SKU_CACHE_SYNC_INTERVAL = 300  # 5 minutes
+SKU_CACHE_SYNC_INTERVAL = 1800  # 30 minutes (reduced from 5 min to save bandwidth)
 
 # Continue with stale cache if remote sync fails
 SKU_CACHE_RETRY_ON_FAIL = True
