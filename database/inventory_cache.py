@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).parent.parent))
 from config import get_db_path
 
 # ==================== Configuration ====================
-INVENTORY_CACHE_SYNC_INTERVAL = 30  # seconds between syncs
+INVENTORY_CACHE_SYNC_INTERVAL = 60  # seconds between syncs (reduced frequency to minimize P: drive contention)
 INVENTORY_CACHE_ENABLED = True
 
 # ==================== Local Cache State ====================
@@ -437,12 +437,14 @@ def _sync_from_remote(project: str):
         """)
         remote_items = remote_cursor.fetchall()
 
-        local_cursor.execute("SELECT serial_number FROM inventory")
-        local_serials = {row[0] for row in local_cursor.fetchall()}
+        local_cursor.execute("SELECT serial_number FROM inventory WHERE sync_status = 'synced'")
+        local_synced_serials = {row[0] for row in local_cursor.fetchall()}
 
+        remote_serials = set()
         for item in remote_items:
             remote_id, sku, serial, lpn, loc, state, entered, created, order = item
-            if serial not in local_serials:
+            remote_serials.add(serial)
+            if serial not in local_synced_serials:
                 try:
                     local_cursor.execute("""
                         INSERT INTO inventory
@@ -452,6 +454,15 @@ def _sync_from_remote(project: str):
                     """, (sku, serial, lpn, loc, state, entered, created, order, remote_id, created))
                 except sqlite3.IntegrityError:
                     pass
+
+        # Remove local synced items that no longer exist on remote (e.g., after export)
+        stale_serials = local_synced_serials - remote_serials
+        if stale_serials:
+            placeholders = ','.join('?' * len(stale_serials))
+            local_cursor.execute(f"""
+                DELETE FROM inventory
+                WHERE sync_status = 'synced' AND serial_number IN ({placeholders})
+            """, list(stale_serials))
 
         local_cursor.execute("""
             INSERT OR REPLACE INTO sync_metadata (key, value) VALUES (?, ?)
@@ -519,6 +530,9 @@ def _sync_imported_from_remote(project: str):
 
 def _background_sync_worker():
     """Background worker that syncs with remote periodically."""
+    # Wait before first sync to let the app load without competing for P: drive
+    if _sync_stop_event.wait(10):
+        return  # Stop was requested during initial delay
     while not _sync_stop_event.is_set():
         for project in ["ecoflow", "halo", "ams_ine"]:
             if _sync_stop_event.is_set():

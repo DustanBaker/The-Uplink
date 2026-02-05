@@ -34,6 +34,19 @@ def close_splash():
         pass  # Not running as frozen executable
 
 
+def run_app():
+    """Run the application."""
+    def on_login_success(user: dict):
+        """Callback when login is successful."""
+        app = MainApplication(user, on_logout=run_app)
+        app.mainloop()
+
+    close_splash()
+
+    login_window = LoginWindow(on_login_success=on_login_success)
+    login_window.mainloop()
+
+
 def main():
     """Main entry point."""
     # Initialize databases
@@ -50,31 +63,8 @@ def main():
     # Create default user if needed
     create_default_user()
 
-    # Close splash screen before showing login window
-    close_splash()
-
-    # Main application loop - avoids recursive mainloop calls on logout
-    while True:
-        logged_in_user = [None]
-        should_restart = [False]
-
-        def on_login_success(user: dict):
-            logged_in_user[0] = user
-
-        login_window = LoginWindow(on_login_success=on_login_success)
-        login_window.mainloop()
-
-        if logged_in_user[0] is None:
-            break  # User closed login window
-
-        def on_logout():
-            should_restart[0] = True
-
-        app = MainApplication(logged_in_user[0], on_logout=on_logout)
-        app.mainloop()
-
-        if not should_restart[0]:
-            break  # User closed app window normally
+    # Run the application
+    run_app()
 
 
 if __name__ == "__main__":

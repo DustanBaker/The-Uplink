@@ -568,15 +568,23 @@ def refresh_halo_sn_cache():
     _load_halo_sn_cache()
 
 
-def lookup_halo_po_number(serial_number: str) -> str:
+def lookup_halo_po_number(serial_number: str, blocking: bool = True) -> str:
     """Look up PO number for a Halo serial number.
 
     Uses in-memory cache to avoid network calls.
     Returns the PO number if found, empty string otherwise.
+
+    Args:
+        serial_number: The serial number to look up.
+        blocking: If True, blocks until cache is loaded from P: drive.
+                  If False, returns '' immediately if cache isn't ready yet.
     """
     # Load cache if not loaded
     if not _halo_sn_cache_loaded:
-        _load_halo_sn_cache()
+        if blocking:
+            _load_halo_sn_cache()
+        else:
+            return ''  # Cache not ready, return empty to avoid blocking
 
     # Use cache lookup (instant, no network)
     with _halo_sn_cache_lock:

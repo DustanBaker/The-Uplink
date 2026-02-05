@@ -90,15 +90,27 @@ class MainApplication(ctk.CTk):
 
     def _deferred_init(self):
         """Initialize network-dependent features after GUI is displayed."""
-        # Initialize SKU cache and start background sync (30 min to reduce bandwidth)
-        init_sku_cache()
-        start_background_sync(interval=1800)  # 30 minutes
+        # Run all initialization in background thread to avoid blocking GUI
+        def init_background():
+            # Initialize local caches first (fast, local SQLite only)
+            init_sku_cache()
+            init_inventory_cache()
 
-        # Initialize inventory cache and start background sync (30 sec for fast updates)
-        init_inventory_cache()
-        start_inventory_sync()
+            # Pre-load Halo SN cache from P: drive BEFORE starting sync threads
+            # so the first user refresh is fast and doesn't compete for P: drive
+            try:
+                lookup_halo_po_number("")  # Triggers cache load from P: drive
+            except Exception:
+                pass
 
-        # Play login sound
+            # Start background sync threads AFTER cache is warm
+            # (inventory sync has a 10s initial delay to avoid competing with user)
+            start_background_sync(interval=1800)  # 30 minutes
+            start_inventory_sync()
+
+        threading.Thread(target=init_background, daemon=True).start()
+
+        # Play login sound (safe to run on main thread)
         self._play_login_sound()
 
         # Check for updates only once at startup (no repeat checks)
@@ -215,14 +227,18 @@ Start-Sleep -Seconds 3
             check_for_updates(GITHUB_REPO, VERSION, on_update_check)
 
     def destroy(self):
-        """Override destroy to clean up all background threads."""
+        """Override destroy to signal background threads to stop (non-blocking)."""
         self._stop_inventory_polling()
+        # Signal threads to stop but don't wait - they're daemon threads
+        # and will be killed when the process exits
         try:
-            stop_inventory_sync()
+            from database.inventory_cache import _sync_stop_event as inv_stop
+            inv_stop.set()
         except Exception:
             pass
         try:
-            stop_background_sync()
+            from database.sku_cache import _sync_stop_event as sku_stop
+            sku_stop.set()
         except Exception:
             pass
         super().destroy()
@@ -295,8 +311,7 @@ Start-Sleep -Seconds 3
         self._create_project_tab(tabview.tab("Halo"), "halo")
         self._create_project_tab(tabview.tab("AMS INE"), "ams_ine")
 
-        # Defer inventory loading until after GUI is displayed
-        self.after(100, self._start_inventory_polling)
+        # No auto-loading - user clicks Refresh to load data
 
     def _create_project_tab(self, parent, project: str):
         """Create the project-specific tab content with form and inventory list."""
@@ -474,17 +489,6 @@ Start-Sleep -Seconds 3
         for i in range(num_columns):
             inventory_list_frame.grid_columnconfigure(i, weight=1)
 
-    def _start_inventory_polling(self):
-        """Start polling to refresh inventory every 10 seconds."""
-        self._refresh_poll_id = self.after(10000, self._poll_inventory)
-
-    def _poll_inventory(self):
-        """Poll and refresh inventory for all projects, then schedule next poll."""
-        for project in self.project_widgets:
-            self._refresh_inventory_list(project)
-        # Only poll every 5 minutes to reduce network traffic (was 10 seconds)
-        self._refresh_poll_id = self.after(300000, self._poll_inventory)
-
     def _stop_inventory_polling(self):
         """Stop the inventory polling."""
         if self._refresh_poll_id:
@@ -518,10 +522,10 @@ Start-Sleep -Seconds 3
             try:
                 total_count = get_inventory_count(project)
                 items = get_all_inventory(project, limit=20)  # Limit at database level
-                # Pre-fetch PO numbers for Halo items
+                # Pre-fetch PO numbers (non-blocking to avoid P: drive delay)
                 for item in items:
                     if project == "halo":
-                        item['_po_number'] = lookup_halo_po_number(item['serial_number']) or '0'
+                        item['_po_number'] = lookup_halo_po_number(item['serial_number'], blocking=False) or ''
                     else:
                         item['_po_number'] = item.get('order_number', '')
                 # Update GUI on main thread
@@ -988,10 +992,10 @@ Start-Sleep -Seconds 3
 
         # Only lookup if exactly 12 characters
         if len(serial) == 12:
-            po_number = lookup_halo_po_number(serial)
+            po_number = lookup_halo_po_number(serial, blocking=False)
             if po_number:
                 self._show_user_status(f"PO #: {po_number}", project, error=False)
-            else:
+            elif po_number == '':
                 self._show_user_status("Serial not found in lookup", project, error=True)
         else:
             # Clear status if not 12 chars
@@ -1003,10 +1007,10 @@ Start-Sleep -Seconds 3
 
         # Only lookup if exactly 12 characters
         if len(serial) == 12:
-            po_number = lookup_halo_po_number(serial)
+            po_number = lookup_halo_po_number(serial, blocking=False)
             if po_number:
                 self._show_admin_status(f"PO #: {po_number}", project, error=False)
-            else:
+            elif po_number == '':
                 self._show_admin_status("Serial not found in lookup", project, error=True)
         else:
             # Clear status if not 12 chars
@@ -1763,7 +1767,7 @@ Start-Sleep -Seconds 3
                 items = get_all_inventory(project, limit=20)  # Limit at database level
                 for item in items:
                     if project == "halo":
-                        item['_po_number'] = lookup_halo_po_number(item['serial_number']) or '0'
+                        item['_po_number'] = lookup_halo_po_number(item['serial_number'], blocking=False) or ''
                     else:
                         item['_po_number'] = item.get('order_number', '')
                 self.after(0, lambda: self._populate_admin_active_inventory(project, items, total_count))
@@ -1876,7 +1880,7 @@ Start-Sleep -Seconds 3
                 items = get_all_imported_inventory(project, limit=20)  # Limit at database level
                 for item in items:
                     if project == "halo":
-                        item['_po_number'] = lookup_halo_po_number(item['serial_number']) or '0'
+                        item['_po_number'] = lookup_halo_po_number(item['serial_number'], blocking=False) or ''
                     else:
                         item['_po_number'] = item.get('order_number', '')
                 self.after(0, lambda: self._populate_admin_archived_inventory(project, items, total_count))
