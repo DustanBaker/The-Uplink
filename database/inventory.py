@@ -117,15 +117,25 @@ def add_inventory_item(item_sku: str, serial_number: str, lpn: str,
 
 
 @with_retry
-def get_all_inventory(project: str = "ecoflow") -> list[dict]:
-    """Get all inventory items from the database."""
+def get_all_inventory(project: str = "ecoflow", limit: int = None) -> list[dict]:
+    """Get all inventory items from the database.
+
+    Args:
+        project: The project name (ecoflow or halo)
+        limit: Optional limit on number of records to return (for performance)
+    """
     conn = get_connection(project)
     cursor = conn.cursor()
-    cursor.execute("""
+
+    query = """
         SELECT id, item_sku, serial_number, lpn, location, repair_state, entered_by, created_at, order_number
         FROM inventory
         ORDER BY created_at DESC
-    """)
+    """
+    if limit:
+        query += f" LIMIT {limit}"
+
+    cursor.execute(query)
     rows = cursor.fetchall()
     conn.close()
 
@@ -143,6 +153,28 @@ def get_all_inventory(project: str = "ecoflow") -> list[dict]:
         }
         for row in rows
     ]
+
+
+@with_retry
+def get_inventory_count(project: str = "ecoflow") -> int:
+    """Get total count of active inventory items."""
+    conn = get_connection(project)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM inventory")
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
+
+
+@with_retry
+def get_imported_inventory_count(project: str = "ecoflow") -> int:
+    """Get total count of archived/imported inventory items."""
+    conn = get_connection(project)
+    cursor = conn.cursor()
+    cursor.execute("SELECT COUNT(*) FROM imported_inventory")
+    count = cursor.fetchone()[0]
+    conn.close()
+    return count
 
 
 @with_retry
@@ -304,17 +336,27 @@ def move_inventory_to_imported(project: str = "ecoflow") -> list[dict]:
 
 
 @with_retry
-def get_all_imported_inventory(project: str = "ecoflow") -> list[dict]:
-    """Get all items from the imported inventory database."""
+def get_all_imported_inventory(project: str = "ecoflow", limit: int = None) -> list[dict]:
+    """Get all items from the imported inventory database.
+
+    Args:
+        project: The project name (ecoflow or halo)
+        limit: Optional limit on number of records to return (for performance)
+    """
     init_imported_inventory_db(project)
 
     conn = get_imported_connection(project)
     cursor = conn.cursor()
-    cursor.execute("""
+
+    query = """
         SELECT id, item_sku, serial_number, lpn, location, repair_state, entered_by, created_at, imported_at, order_number
         FROM imported_inventory
         ORDER BY imported_at DESC, created_at DESC
-    """)
+    """
+    if limit:
+        query += f" LIMIT {limit}"
+
+    cursor.execute(query)
     rows = cursor.fetchall()
     conn.close()
 

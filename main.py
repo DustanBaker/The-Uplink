@@ -4,6 +4,7 @@
 import customtkinter as ctk
 from database import init_db, init_inventory_db, create_user, get_user_by_username
 from database.sku_cache import init_sku_cache
+from database.inventory_cache import init_inventory_cache
 from utils import hash_password
 from gui import LoginWindow, MainApplication
 
@@ -52,11 +53,14 @@ def main():
     """Main entry point."""
     # Initialize databases
     init_db()
-    for project in ["ecoflow", "halo"]:
+    for project in ["ecoflow", "halo", "ams_ine"]:
         init_inventory_db(project)
 
     # Initialize SKU cache
     init_sku_cache()
+
+    # Initialize inventory cache (local-first for fast submits)
+    init_inventory_cache()
 
     # Create default user if needed
     create_default_user()

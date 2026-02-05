@@ -9,10 +9,23 @@ import threading
 import platform
 from database import (
     create_user, get_all_users, update_user_password, update_user_admin_status, delete_user,
-    add_inventory_item, get_all_inventory, update_inventory_item, delete_inventory_item,
-    move_inventory_to_imported, export_inventory_to_csv, get_all_imported_inventory,
+    export_inventory_to_csv,
     lookup_halo_po_number,
     get_email_settings, update_email_settings
+)
+from database.inventory_cache import (
+    add_inventory_item_cached as add_inventory_item,
+    get_all_inventory_cached as get_all_inventory,
+    get_inventory_count_cached as get_inventory_count,
+    update_inventory_item_cached as update_inventory_item,
+    delete_inventory_item_cached as delete_inventory_item,
+    get_all_imported_inventory_cached as get_all_imported_inventory,
+    get_imported_inventory_count_cached as get_imported_inventory_count,
+    move_to_imported_cached as move_inventory_to_imported,
+    init_inventory_cache,
+    start_inventory_sync,
+    stop_inventory_sync,
+    force_sync_now
 )
 from database.sku_cache import (
     add_sku_cached as add_sku,
@@ -81,6 +94,10 @@ class MainApplication(ctk.CTk):
         # Initialize SKU cache and start background sync (30 min to reduce bandwidth)
         init_sku_cache()
         start_background_sync(interval=1800)  # 30 minutes
+
+        # Initialize inventory cache and start background sync (30 sec for fast updates)
+        init_inventory_cache()
+        start_inventory_sync()
 
         # Play login sound
         self._play_login_sound()
@@ -264,10 +281,12 @@ Start-Sleep -Seconds 3
         # Add tabs for each project
         tabview.add("EcoFlow")
         tabview.add("Halo")
+        tabview.add("AMS INE")
 
         # Create content for each tab
         self._create_project_tab(tabview.tab("EcoFlow"), "ecoflow")
         self._create_project_tab(tabview.tab("Halo"), "halo")
+        self._create_project_tab(tabview.tab("AMS INE"), "ams_ine")
 
         # Defer inventory loading until after GUI is displayed
         self.after(100, self._start_inventory_polling)
@@ -338,18 +357,25 @@ Start-Sleep -Seconds 3
         else:
             self.project_widgets[project]['order_entry'] = None
 
-        # Location (dropdown with project-specific options)
+        # Location (dropdown for halo/ecoflow, text entry for ams_ine)
         location_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
         location_frame.pack(side="left", padx=(0, 15))
         ctk.CTkLabel(location_frame, text="Location", font=ctk.CTkFont(size=14)).pack(anchor="w")
-        if project == "halo":
-            location_options = ["INPROD01","Halocage1","Halocage2","Halocage3","Halocage4"]
+        if project == "ams_ine":
+            # Text entry for AMS INE
+            location_entry = ctk.CTkEntry(location_frame, width=140, font=ctk.CTkFont(size=14))
+            location_entry.pack()
+            self.project_widgets[project]['location_dropdown'] = location_entry
         else:
-            location_options = ["EFINPROD01"]
-        location_dropdown = ctk.CTkOptionMenu(location_frame, width=140, values=location_options, font=ctk.CTkFont(size=14))
-        location_dropdown.set(location_options[0])
-        location_dropdown.pack()
-        self.project_widgets[project]['location_dropdown'] = location_dropdown
+            # Dropdown for other projects
+            if project == "halo":
+                location_options = ["INPROD01","Halocage1","Halocage2","Halocage3","Halocage4"]
+            else:
+                location_options = ["EFINPROD01"]
+            location_dropdown = ctk.CTkOptionMenu(location_frame, width=140, values=location_options, font=ctk.CTkFont(size=14))
+            location_dropdown.set(location_options[0])
+            location_dropdown.pack()
+            self.project_widgets[project]['location_dropdown'] = location_dropdown
 
         # Repair State (only shown for EcoFlow, not for Halo)
         if project != "halo":
@@ -403,7 +429,8 @@ Start-Sleep -Seconds 3
         qty_label = ctk.CTkLabel(
             list_header,
             text="(0 items)",
-            font=ctk.CTkFont(size=14)
+            font=ctk.CTkFont(size=14),
+            text_color="gray70"
         )
         qty_label.pack(side="left", padx=(10, 0))
         self.project_widgets[project]['inventory_qty_label'] = qty_label
@@ -472,20 +499,39 @@ Start-Sleep -Seconds 3
 
         # Fetch data in background thread
         def fetch_data():
-            items = get_all_inventory(project)[:20]  # Limit to 20 items
-            # Pre-fetch PO numbers for Halo items
-            for item in items:
-                if project == "halo":
-                    item['_po_number'] = lookup_halo_po_number(item['serial_number']) or '0'
-                else:
-                    item['_po_number'] = item.get('order_number', '')
-            # Update GUI on main thread
-            self.after(0, lambda: self._populate_inventory_list(project, items))
+            try:
+                total_count = get_inventory_count(project)
+                items = get_all_inventory(project, limit=50)  # Limit at database level
+                # Pre-fetch PO numbers for Halo items
+                for item in items:
+                    if project == "halo":
+                        item['_po_number'] = lookup_halo_po_number(item['serial_number']) or '0'
+                    else:
+                        item['_po_number'] = item.get('order_number', '')
+                # Update GUI on main thread
+                self.after(0, lambda: self._populate_inventory_list(project, items, total_count))
+            except Exception:
+                self.after(0, lambda: self._show_inventory_error(
+                    self.project_widgets[project]['inventory_list_frame'],
+                    "Failed to load inventory: Network error"
+                ))
 
         thread = threading.Thread(target=fetch_data, daemon=True)
         thread.start()
 
-    def _populate_inventory_list(self, project: str, items: list):
+    def _show_inventory_error(self, frame, message: str):
+        """Show an error message in an inventory frame."""
+        for widget in frame.winfo_children():
+            widget.destroy()
+        error_label = ctk.CTkLabel(
+            frame,
+            text=message,
+            font=ctk.CTkFont(size=14),
+            text_color="red"
+        )
+        error_label.grid(row=0, column=0, padx=20, pady=20)
+
+    def _populate_inventory_list(self, project: str, items: list, total_count: int = 0):
         """Populate inventory list with fetched data (called on main thread)."""
         inventory_list_frame = self.project_widgets[project]['inventory_list_frame']
 
@@ -558,8 +604,8 @@ Start-Sleep -Seconds 3
             )
             delete_btn.grid(row=row, column=col, padx=2, pady=3)
 
-        # Update quantity counter
-        self.project_widgets[project]['inventory_qty_label'].configure(text=f"({len(items)} items)")
+        # Update quantity counter with total database count
+        self.project_widgets[project]['inventory_qty_label'].configure(text=f"({total_count} item{'s' if total_count != 1 else ''})")
 
     def _show_edit_inventory_dialog(self, item: dict, project: str = "ecoflow"):
         """Show dialog to edit an inventory item."""
@@ -946,6 +992,8 @@ Start-Sleep -Seconds 3
 
     def _handle_export_inventory(self, project: str = "ecoflow"):
         """Handle export and archive of inventory."""
+        # Sync all pending items to remote before export
+        force_sync_now()
         items = get_all_inventory(project)
 
         if not items:
@@ -1109,10 +1157,12 @@ Start-Sleep -Seconds 3
 
         project_tabview.add("EcoFlow")
         project_tabview.add("Halo")
+        project_tabview.add("AMS INE")
 
         # Create SKU management for each project
         self._create_project_skus_content(project_tabview.tab("EcoFlow"), "ecoflow")
         self._create_project_skus_content(project_tabview.tab("Halo"), "halo")
+        self._create_project_skus_content(project_tabview.tab("AMS INE"), "ams_ine")
 
     def _create_project_skus_content(self, parent, project: str):
         """Create the SKU management content for a specific project."""
@@ -1253,10 +1303,12 @@ Start-Sleep -Seconds 3
 
         project_tabview.add("EcoFlow")
         project_tabview.add("Halo")
+        project_tabview.add("AMS INE")
 
         # Create inventory views for each project
         self._create_admin_project_inventory(project_tabview.tab("EcoFlow"), "ecoflow")
         self._create_admin_project_inventory(project_tabview.tab("Halo"), "halo")
+        self._create_admin_project_inventory(project_tabview.tab("AMS INE"), "ams_ine")
 
     def _create_admin_project_inventory(self, parent, project: str):
         """Create the inventory sub-tabs (Active/Archived) for a specific project."""
@@ -1336,18 +1388,25 @@ Start-Sleep -Seconds 3
         else:
             self.admin_project_widgets[project]['order_entry'] = None
 
-        # Location (dropdown with project-specific options)
+        # Location (dropdown for halo/ecoflow, text entry for ams_ine)
         location_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
         location_frame.pack(side="left", padx=(0, 10))
         ctk.CTkLabel(location_frame, text="Location", font=ctk.CTkFont(size=13)).pack(anchor="w")
-        if project == "halo":
-            location_options = ["INPROD01", "Halocage1", "Halocage2", "Halocage3", "Halocage4"]
+        if project == "ams_ine":
+            # Text entry for AMS INE
+            admin_location_entry = ctk.CTkEntry(location_frame, width=120, font=ctk.CTkFont(size=13))
+            admin_location_entry.pack()
+            self.admin_project_widgets[project]['location_dropdown'] = admin_location_entry
         else:
-            location_options = ["EFINPROD01"]
-        admin_location_dropdown = ctk.CTkOptionMenu(location_frame, width=120, values=location_options, font=ctk.CTkFont(size=13))
-        admin_location_dropdown.set(location_options[0])
-        admin_location_dropdown.pack()
-        self.admin_project_widgets[project]['location_dropdown'] = admin_location_dropdown
+            # Dropdown for other projects
+            if project == "halo":
+                location_options = ["INPROD01", "Halocage1", "Halocage2", "Halocage3", "Halocage4"]
+            else:
+                location_options = ["EFINPROD01"]
+            admin_location_dropdown = ctk.CTkOptionMenu(location_frame, width=120, values=location_options, font=ctk.CTkFont(size=13))
+            admin_location_dropdown.set(location_options[0])
+            admin_location_dropdown.pack()
+            self.admin_project_widgets[project]['location_dropdown'] = admin_location_dropdown
 
         # Repair State (only shown for EcoFlow, not for Halo)
         if project != "halo":
@@ -1384,7 +1443,7 @@ Start-Sleep -Seconds 3
 
         # Header with refresh button for inventory list
         header_frame = ctk.CTkFrame(parent, fg_color="transparent")
-        header_frame.pack(fill="x", padx=10, pady=(5, 5))
+        header_frame.pack(fill="x", padx=10, pady=(10, 5))
 
         title = ctk.CTkLabel(
             header_frame,
@@ -1397,7 +1456,8 @@ Start-Sleep -Seconds 3
         admin_active_qty_label = ctk.CTkLabel(
             header_frame,
             text="(0 items)",
-            font=ctk.CTkFont(size=13)
+            font=ctk.CTkFont(size=14),
+            text_color="gray70"
         )
         admin_active_qty_label.pack(side="left", padx=(10, 0))
         self.admin_project_widgets[project]['active_inventory_qty_label'] = admin_active_qty_label
@@ -1452,7 +1512,8 @@ Start-Sleep -Seconds 3
         admin_archived_qty_label = ctk.CTkLabel(
             header_frame,
             text="(0 items)",
-            font=ctk.CTkFont(size=14)
+            font=ctk.CTkFont(size=14),
+            text_color="gray70"
         )
         admin_archived_qty_label.pack(side="left", padx=(10, 0))
         self.admin_project_widgets[project]['archived_qty_label'] = admin_archived_qty_label
@@ -1464,7 +1525,19 @@ Start-Sleep -Seconds 3
             font=ctk.CTkFont(size=14),
             command=lambda p=project: self._refresh_admin_archived_inventory(p)
         )
-        refresh_btn.pack(side="right")
+        refresh_btn.pack(side="right", padx=(5, 0))
+
+        # Export All button
+        export_all_btn = ctk.CTkButton(
+            header_frame,
+            text="Export All to CSV",
+            width=140,
+            font=ctk.CTkFont(size=14),
+            fg_color="#17a2b8",
+            hover_color="#138496",
+            command=lambda p=project: self._export_all_archived_inventory(p)
+        )
+        export_all_btn.pack(side="right")
 
         # Scrollable frame for inventory list
         admin_archived_inventory_frame = ctk.CTkScrollableFrame(parent)
@@ -1660,18 +1733,25 @@ Start-Sleep -Seconds 3
 
         # Fetch data in background thread
         def fetch_data():
-            items = get_all_inventory(project)[:20]  # Limit to 20 items
-            for item in items:
-                if project == "halo":
-                    item['_po_number'] = lookup_halo_po_number(item['serial_number']) or '0'
-                else:
-                    item['_po_number'] = item.get('order_number', '')
-            self.after(0, lambda: self._populate_admin_active_inventory(project, items))
+            try:
+                total_count = get_inventory_count(project)
+                items = get_all_inventory(project, limit=50)  # Limit at database level
+                for item in items:
+                    if project == "halo":
+                        item['_po_number'] = lookup_halo_po_number(item['serial_number']) or '0'
+                    else:
+                        item['_po_number'] = item.get('order_number', '')
+                self.after(0, lambda: self._populate_admin_active_inventory(project, items, total_count))
+            except Exception:
+                self.after(0, lambda: self._show_inventory_error(
+                    self.admin_project_widgets[project]['active_inventory_frame'],
+                    "Failed to load inventory: Network error"
+                ))
 
         thread = threading.Thread(target=fetch_data, daemon=True)
         thread.start()
 
-    def _populate_admin_active_inventory(self, project: str, items: list):
+    def _populate_admin_active_inventory(self, project: str, items: list, total_count: int = 0):
         """Populate admin active inventory with fetched data."""
         admin_active_inventory_frame = self.admin_project_widgets[project]['active_inventory_frame']
         for widget in admin_active_inventory_frame.winfo_children():
@@ -1737,8 +1817,8 @@ Start-Sleep -Seconds 3
             )
             delete_btn.pack(side="left")
 
-        # Update quantity counter
-        self.admin_project_widgets[project]['active_inventory_qty_label'].configure(text=f"({len(items)} items)")
+        # Update quantity counter with total database count
+        self.admin_project_widgets[project]['active_inventory_qty_label'].configure(text=f"({total_count} item{'s' if total_count != 1 else ''})")
 
     def _refresh_admin_archived_inventory(self, project: str = "ecoflow"):
         """Refresh the admin archived inventory list for a specific project."""
@@ -1762,28 +1842,34 @@ Start-Sleep -Seconds 3
 
         # Fetch data in background thread
         def fetch_data():
-            items = get_all_imported_inventory(project)[:20]  # Limit to 20 items
-            for item in items:
-                if project == "halo":
-                    item['_po_number'] = lookup_halo_po_number(item['serial_number']) or '0'
-                else:
-                    item['_po_number'] = item.get('order_number', '')
-            self.after(0, lambda: self._populate_admin_archived_inventory(project, items))
+            try:
+                total_count = get_imported_inventory_count(project)
+                items = get_all_imported_inventory(project, limit=50)  # Limit at database level
+                for item in items:
+                    if project == "halo":
+                        item['_po_number'] = lookup_halo_po_number(item['serial_number']) or '0'
+                    else:
+                        item['_po_number'] = item.get('order_number', '')
+                self.after(0, lambda: self._populate_admin_archived_inventory(project, items, total_count))
+            except Exception as e:
+                self.after(0, lambda: self._show_inventory_error(
+                    self.admin_project_widgets[project]['archived_inventory_frame'],
+                    f"Failed to load archived inventory: Network error"
+                ))
 
         thread = threading.Thread(target=fetch_data, daemon=True)
         thread.start()
 
-    def _populate_admin_archived_inventory(self, project: str, items: list):
+    def _populate_admin_archived_inventory(self, project: str, items: list, total_count: int = 0):
         """Populate admin archived inventory with fetched data."""
         admin_archived_inventory_frame = self.admin_project_widgets[project]['archived_inventory_frame']
         for widget in admin_archived_inventory_frame.winfo_children():
             widget.destroy()
 
-        # Update quantity counter
+        # Update quantity counter with total database count
         qty_label = self.admin_project_widgets[project].get('archived_qty_label')
         if qty_label:
-            count = len(items)
-            qty_label.configure(text=f"({count} item{'s' if count != 1 else ''})")
+            qty_label.configure(text=f"({total_count} item{'s' if total_count != 1 else ''})")
 
         # Header row
         headers = ["SKU", "Serial Number", "LPN", "PO #", "Repair State", "Entered By", "Created", "Archived"]
@@ -1977,6 +2063,8 @@ Start-Sleep -Seconds 3
 
     def _handle_admin_export_inventory(self, project: str = "ecoflow"):
         """Handle export and archive of inventory from admin panel."""
+        # Sync all pending items to remote before export
+        force_sync_now()
         items = get_all_inventory(project)
 
         if not items:
@@ -2050,6 +2138,131 @@ Start-Sleep -Seconds 3
             ctk.CTkButton(dialog, text="OK", width=80, command=dialog.destroy).pack()
             dialog.wait_visibility()
             dialog.grab_set()
+
+    def _export_all_archived_inventory(self, project: str = "ecoflow"):
+        """Export ALL archived inventory items from remote database to CSV."""
+        from database.inventory_cache import _get_remote_imported_connection
+
+        # Show loading dialog
+        loading_dialog = ctk.CTkToplevel(self)
+        loading_dialog.title("Exporting...")
+        loading_dialog.geometry("300x100")
+        loading_dialog.resizable(False, False)
+        loading_dialog.transient(self)
+        ctk.CTkLabel(loading_dialog, text="Fetching all archived items...", font=ctk.CTkFont(size=14)).pack(pady=30)
+        loading_dialog.update()
+
+        def fetch_and_export():
+            try:
+                # Fetch ALL items from remote database
+                remote_conn = _get_remote_imported_connection(project)
+                remote_cursor = remote_conn.cursor()
+
+                remote_cursor.execute("""
+                    SELECT item_sku, serial_number, lpn, location, repair_state,
+                           entered_by, created_at, imported_at, order_number
+                    FROM imported_inventory
+                    ORDER BY imported_at DESC
+                """)
+                items = remote_cursor.fetchall()
+                remote_conn.close()
+
+                # Close loading dialog and show file picker on main thread
+                self.after(0, lambda: self._finish_archived_export(loading_dialog, items, project))
+
+            except Exception as e:
+                self.after(0, lambda: self._show_archived_export_error(loading_dialog, str(e)))
+
+        # Run in background thread
+        import threading
+        thread = threading.Thread(target=fetch_and_export, daemon=True)
+        thread.start()
+
+    def _finish_archived_export(self, loading_dialog, items, project: str):
+        """Finish the archived export after fetching data."""
+        loading_dialog.destroy()
+
+        if not items:
+            dialog = ctk.CTkToplevel(self)
+            dialog.title("Export")
+            dialog.geometry("300x100")
+            dialog.resizable(False, False)
+            dialog.transient(self)
+            ctk.CTkLabel(dialog, text="No archived items to export", font=ctk.CTkFont(size=14)).pack(pady=20)
+            ctk.CTkButton(dialog, text="OK", width=80, command=dialog.destroy).pack()
+            dialog.wait_visibility()
+            dialog.grab_set()
+            return
+
+        # Generate filename
+        now = datetime.now().strftime("%Y-%m-%d %H-%M-%S")
+        project_name = project.capitalize()
+        default_filename = f"{project_name} archived inventory({now}).csv"
+
+        # Ask user where to save
+        filepath = filedialog.asksaveasfilename(
+            title="Save Archived Inventory CSV",
+            defaultextension=".csv",
+            initialfile=default_filename,
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+
+        if not filepath:
+            return  # User cancelled
+
+        try:
+            # Write CSV
+            with open(filepath, 'w', newline='', encoding='utf-8') as f:
+                writer = csv.writer(f)
+
+                # Header row
+                if project == "halo":
+                    writer.writerow(["SKU", "Serial Number", "LPN", "Repair State", "Entered By", "Created", "Archived"])
+                else:
+                    writer.writerow(["SKU", "Serial Number", "LPN", "Order #", "Repair State", "Entered By", "Created", "Archived"])
+
+                # Data rows
+                for item in items:
+                    sku, serial, lpn, loc, state, entered, created, archived, order = item
+                    if project == "halo":
+                        writer.writerow([sku, serial, lpn, state, entered, created, archived])
+                    else:
+                        writer.writerow([sku, serial, lpn, order or '', state, entered, created, archived])
+
+            # Show success dialog
+            dialog = ctk.CTkToplevel(self)
+            dialog.title("Export Complete")
+            dialog.geometry("350x120")
+            dialog.resizable(False, False)
+            dialog.transient(self)
+            ctk.CTkLabel(dialog, text=f"Exported {len(items)} archived items", font=ctk.CTkFont(size=14)).pack(pady=20)
+            ctk.CTkButton(dialog, text="OK", width=80, command=dialog.destroy).pack()
+            dialog.wait_visibility()
+            dialog.grab_set()
+
+        except Exception as e:
+            dialog = ctk.CTkToplevel(self)
+            dialog.title("Export Error")
+            dialog.geometry("350x120")
+            dialog.resizable(False, False)
+            dialog.transient(self)
+            ctk.CTkLabel(dialog, text=f"Export failed: {str(e)}", font=ctk.CTkFont(size=14)).pack(pady=20)
+            ctk.CTkButton(dialog, text="OK", width=80, command=dialog.destroy).pack()
+            dialog.wait_visibility()
+            dialog.grab_set()
+
+    def _show_archived_export_error(self, loading_dialog, error_msg: str):
+        """Show error dialog for archived export."""
+        loading_dialog.destroy()
+        dialog = ctk.CTkToplevel(self)
+        dialog.title("Export Error")
+        dialog.geometry("350x120")
+        dialog.resizable(False, False)
+        dialog.transient(self)
+        ctk.CTkLabel(dialog, text=f"Failed to fetch data: Network error", font=ctk.CTkFont(size=14)).pack(pady=20)
+        ctk.CTkButton(dialog, text="OK", width=80, command=dialog.destroy).pack()
+        dialog.wait_visibility()
+        dialog.grab_set()
 
     def _on_admin_sku_keyrelease(self, event, project: str = "ecoflow"):
         """Handle key release in admin SKU entry for autocomplete."""
@@ -2262,7 +2475,7 @@ Start-Sleep -Seconds 3
         # Fetch data in background thread
         def fetch_data():
             if filter_text:
-                skus = search_skus(filter_text, limit=20, project=project)
+                skus = search_skus(filter_text, limit=50, project=project)
             else:
                 skus = get_all_skus(project)[:20]  # Limit to 20 items
             count = get_sku_count(project)

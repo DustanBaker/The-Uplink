@@ -299,7 +299,7 @@ def _background_sync_worker():
                 break  # Stop event was set
 
             # Sync each project
-            for project in ['ecoflow', 'halo']:
+            for project in ['ecoflow', 'halo', 'ams_ine']:
                 if _sync_stop_event.is_set():
                     break
 
@@ -378,7 +378,7 @@ def init_sku_cache():
 
     # Initialize cache for both projects
     with _cache_lock:
-        for project in ['ecoflow', 'halo']:
+        for project in ['ecoflow', 'halo', 'ams_ine']:
             if project not in _cache:
                 _cache[project] = {
                     'skus': {},
@@ -619,7 +619,7 @@ def force_sync_all():
     Useful for manual refresh or troubleshooting.
     """
     logger.info("Forcing full cache sync...")
-    for project in ['ecoflow', 'halo']:
+    for project in ['ecoflow', 'halo', 'ams_ine']:
         sync_project_from_remote(project)
 
 
@@ -631,7 +631,7 @@ def get_cache_status() -> dict:
     status = {}
 
     with _cache_lock:
-        for project in ['ecoflow', 'halo']:
+        for project in ['ecoflow', 'halo', 'ams_ine']:
             if project in _cache:
                 metadata = _cache[project]['metadata']
                 status[project] = {
