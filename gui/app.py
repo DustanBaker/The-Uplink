@@ -435,6 +435,17 @@ Start-Sleep -Seconds 3
         qty_label.pack(side="left", padx=(10, 0))
         self.project_widgets[project]['inventory_qty_label'] = qty_label
 
+        refresh_button = ctk.CTkButton(
+            list_header,
+            text="Refresh",
+            width=100,
+            font=ctk.CTkFont(size=14),
+            fg_color="#17a2b8",
+            hover_color="#138496",
+            command=lambda p=project: self._refresh_inventory_list(p)
+        )
+        refresh_button.pack(side="right", padx=(0, 10))
+
         export_button = ctk.CTkButton(
             list_header,
             text="Export & Archive",
@@ -455,8 +466,6 @@ Start-Sleep -Seconds 3
         num_columns = 7 if project != "halo" else 6
         for i in range(num_columns):
             inventory_list_frame.grid_columnconfigure(i, weight=1)
-
-        self._refresh_inventory_list(project)
 
     def _start_inventory_polling(self):
         """Start polling to refresh inventory every 10 seconds."""
@@ -501,7 +510,7 @@ Start-Sleep -Seconds 3
         def fetch_data():
             try:
                 total_count = get_inventory_count(project)
-                items = get_all_inventory(project, limit=50)  # Limit at database level
+                items = get_all_inventory(project, limit=20)  # Limit at database level
                 # Pre-fetch PO numbers for Halo items
                 for item in items:
                     if project == "halo":
@@ -1467,6 +1476,8 @@ Start-Sleep -Seconds 3
             text="Refresh",
             width=100,
             font=ctk.CTkFont(size=14),
+            fg_color="#17a2b8",
+            hover_color="#138496",
             command=lambda p=project: self._refresh_admin_active_inventory(p)
         )
         refresh_btn.pack(side="right", padx=(5, 0))
@@ -1491,9 +1502,6 @@ Start-Sleep -Seconds 3
         num_columns = 8 if project != "halo" else 7
         for i in range(num_columns):
             admin_active_inventory_frame.grid_columnconfigure(i, weight=1)
-
-        # Defer inventory loading until after GUI is displayed
-        self.after(100, lambda p=project: self._refresh_admin_active_inventory(p))
 
     def _create_archived_inventory_view(self, parent, project: str = "ecoflow"):
         """Create the archived inventory view for a specific project."""
@@ -1523,6 +1531,8 @@ Start-Sleep -Seconds 3
             text="Refresh",
             width=100,
             font=ctk.CTkFont(size=14),
+            fg_color="#17a2b8",
+            hover_color="#138496",
             command=lambda p=project: self._refresh_admin_archived_inventory(p)
         )
         refresh_btn.pack(side="right", padx=(5, 0))
@@ -1533,8 +1543,8 @@ Start-Sleep -Seconds 3
             text="Export All to CSV",
             width=140,
             font=ctk.CTkFont(size=14),
-            fg_color="#17a2b8",
-            hover_color="#138496",
+            fg_color="#6c757d",
+            hover_color="#5a6268",
             command=lambda p=project: self._export_all_archived_inventory(p)
         )
         export_all_btn.pack(side="right")
@@ -1548,9 +1558,6 @@ Start-Sleep -Seconds 3
         num_columns = 8 if project != "halo" else 7
         for i in range(num_columns):
             admin_archived_inventory_frame.grid_columnconfigure(i, weight=1)
-
-        # Defer inventory loading until after GUI is displayed
-        self.after(100, lambda p=project: self._refresh_admin_archived_inventory(p))
 
     def _create_email_settings_tab(self, parent):
         """Create the email settings configuration tab."""
@@ -1735,7 +1742,7 @@ Start-Sleep -Seconds 3
         def fetch_data():
             try:
                 total_count = get_inventory_count(project)
-                items = get_all_inventory(project, limit=50)  # Limit at database level
+                items = get_all_inventory(project, limit=20)  # Limit at database level
                 for item in items:
                     if project == "halo":
                         item['_po_number'] = lookup_halo_po_number(item['serial_number']) or '0'
@@ -1844,7 +1851,7 @@ Start-Sleep -Seconds 3
         def fetch_data():
             try:
                 total_count = get_imported_inventory_count(project)
-                items = get_all_imported_inventory(project, limit=50)  # Limit at database level
+                items = get_all_imported_inventory(project, limit=20)  # Limit at database level
                 for item in items:
                     if project == "halo":
                         item['_po_number'] = lookup_halo_po_number(item['serial_number']) or '0'
@@ -2475,7 +2482,7 @@ Start-Sleep -Seconds 3
         # Fetch data in background thread
         def fetch_data():
             if filter_text:
-                skus = search_skus(filter_text, limit=50, project=project)
+                skus = search_skus(filter_text, limit=20, project=project)
             else:
                 skus = get_all_skus(project)[:20]  # Limit to 20 items
             count = get_sku_count(project)
