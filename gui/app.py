@@ -24,8 +24,7 @@ from database.inventory_cache import (
     move_to_imported_cached as move_inventory_to_imported,
     init_inventory_cache,
     start_inventory_sync,
-    stop_inventory_sync,
-    force_sync_now
+    stop_inventory_sync
 )
 from database.sku_cache import (
     add_sku_cached as add_sku,
@@ -216,8 +215,16 @@ Start-Sleep -Seconds 3
             check_for_updates(GITHUB_REPO, VERSION, on_update_check)
 
     def destroy(self):
-        """Override destroy to clean up background sync thread."""
-        stop_background_sync()
+        """Override destroy to clean up all background threads."""
+        self._stop_inventory_polling()
+        try:
+            stop_inventory_sync()
+        except Exception:
+            pass
+        try:
+            stop_background_sync()
+        except Exception:
+            pass
         super().destroy()
 
     def _play_success_sound(self):
@@ -530,6 +537,8 @@ Start-Sleep -Seconds 3
 
     def _show_inventory_error(self, frame, message: str):
         """Show an error message in an inventory frame."""
+        if not frame.winfo_exists():
+            return
         for widget in frame.winfo_children():
             widget.destroy()
         error_label = ctk.CTkLabel(
@@ -542,7 +551,11 @@ Start-Sleep -Seconds 3
 
     def _populate_inventory_list(self, project: str, items: list, total_count: int = 0):
         """Populate inventory list with fetched data (called on main thread)."""
+        if not self.winfo_exists():
+            return
         inventory_list_frame = self.project_widgets[project]['inventory_list_frame']
+        if not inventory_list_frame.winfo_exists():
+            return
 
         # Clear existing widgets (including loading message)
         for widget in inventory_list_frame.winfo_children():
@@ -1001,8 +1014,6 @@ Start-Sleep -Seconds 3
 
     def _handle_export_inventory(self, project: str = "ecoflow"):
         """Handle export and archive of inventory."""
-        # Sync all pending items to remote before export
-        force_sync_now()
         items = get_all_inventory(project)
 
         if not items:
@@ -1030,34 +1041,41 @@ Start-Sleep -Seconds 3
         if not filepath:
             return  # User cancelled
 
-        # Move items to imported inventory and export CSV
-        moved_items = move_inventory_to_imported(project)
+        self._show_user_status("Exporting...", project, error=False)
 
-        if export_inventory_to_csv(moved_items, filepath, project):
-            self._refresh_inventory_list(project)
-            self._play_success_sound()
-
-            # Send email if enabled
-            email_settings = get_email_settings()
-            if email_settings["enabled"] and email_settings["sender_email"] and email_settings["recipients"]:
-                success, msg = send_csv_email(
-                    smtp_server=email_settings["smtp_server"],
-                    smtp_port=email_settings["smtp_port"],
-                    sender_email=email_settings["sender_email"],
-                    sender_password=email_settings["sender_password"],
-                    recipients=email_settings["recipients"],
-                    csv_filepath=filepath,
-                    project=project,
-                    item_count=len(moved_items)
-                )
-                if success:
-                    self._show_user_status(f"Exported {len(moved_items)} items and emailed", project, error=False)
+        # Run export in background thread to avoid freezing UI
+        def do_export():
+            try:
+                moved_items = move_inventory_to_imported(project)
+                if export_inventory_to_csv(moved_items, filepath, project):
+                    email_msg = ""
+                    email_settings = get_email_settings()
+                    if email_settings["enabled"] and email_settings["sender_email"] and email_settings["recipients"]:
+                        success, msg = send_csv_email(
+                            smtp_server=email_settings["smtp_server"],
+                            smtp_port=email_settings["smtp_port"],
+                            sender_email=email_settings["sender_email"],
+                            sender_password=email_settings["sender_password"],
+                            recipients=email_settings["recipients"],
+                            csv_filepath=filepath,
+                            project=project,
+                            item_count=len(moved_items)
+                        )
+                        if success:
+                            email_msg = f"Exported {len(moved_items)} items and emailed"
+                        else:
+                            email_msg = f"Exported but email failed: {msg}"
+                    else:
+                        email_msg = f"Exported {len(moved_items)} items and archived"
+                    self.after(0, lambda: self._show_user_status(email_msg, project, error=False))
+                    self.after(0, lambda: self._refresh_inventory_list(project))
+                    self.after(0, self._play_success_sound)
                 else:
-                    self._show_user_status(f"Exported but email failed: {msg}", project, error=True)
-            else:
-                self._show_user_status(f"Exported {len(moved_items)} items and archived", project, error=False)
-        else:
-            self._show_user_status("Failed to export CSV", project, error=True)
+                    self.after(0, lambda: self._show_user_status("Failed to export CSV", project, error=True))
+            except Exception as e:
+                self.after(0, lambda: self._show_user_status(f"Export failed: {str(e)}", project, error=True))
+
+        threading.Thread(target=do_export, daemon=True).start()
 
     def _create_admin_panel(self, parent):
         """Create the admin panel with tabbed interface for Users, SKUs, and Inventory."""
@@ -1760,7 +1778,11 @@ Start-Sleep -Seconds 3
 
     def _populate_admin_active_inventory(self, project: str, items: list, total_count: int = 0):
         """Populate admin active inventory with fetched data."""
+        if not self.winfo_exists():
+            return
         admin_active_inventory_frame = self.admin_project_widgets[project]['active_inventory_frame']
+        if not admin_active_inventory_frame.winfo_exists():
+            return
         for widget in admin_active_inventory_frame.winfo_children():
             widget.destroy()
 
@@ -1869,7 +1891,11 @@ Start-Sleep -Seconds 3
 
     def _populate_admin_archived_inventory(self, project: str, items: list, total_count: int = 0):
         """Populate admin archived inventory with fetched data."""
+        if not self.winfo_exists():
+            return
         admin_archived_inventory_frame = self.admin_project_widgets[project]['archived_inventory_frame']
+        if not admin_archived_inventory_frame.winfo_exists():
+            return
         for widget in admin_archived_inventory_frame.winfo_children():
             widget.destroy()
 
@@ -2070,12 +2096,9 @@ Start-Sleep -Seconds 3
 
     def _handle_admin_export_inventory(self, project: str = "ecoflow"):
         """Handle export and archive of inventory from admin panel."""
-        # Sync all pending items to remote before export
-        force_sync_now()
         items = get_all_inventory(project)
 
         if not items:
-            # Show a simple dialog for admin since they don't have user_status_label
             dialog = ctk.CTkToplevel(self)
             dialog.title("Export")
             dialog.geometry("300x100")
@@ -2096,7 +2119,6 @@ Start-Sleep -Seconds 3
         else:
             default_dir = r"T:\3PL Files\Stock Import"
 
-        # Ask user where to save the file
         filepath = filedialog.asksaveasfilename(
             title="Save CSV Export",
             defaultextension=".csv",
@@ -2108,43 +2130,52 @@ Start-Sleep -Seconds 3
         if not filepath:
             return  # User cancelled
 
-        # Move items to imported inventory and export CSV
-        moved_items = move_inventory_to_imported(project)
+        self._show_admin_status("Exporting...", project, error=False)
 
-        if export_inventory_to_csv(moved_items, filepath, project):
-            self._refresh_admin_active_inventory(project)
-            self._refresh_admin_archived_inventory(project)
-            self._play_success_sound()
+        # Run export in background thread to avoid freezing UI
+        def do_export():
+            try:
+                moved_items = move_inventory_to_imported(project)
+                if export_inventory_to_csv(moved_items, filepath, project):
+                    email_msg = ""
+                    email_settings = get_email_settings()
+                    if email_settings["enabled"] and email_settings["sender_email"] and email_settings["recipients"]:
+                        success, msg = send_csv_email(
+                            smtp_server=email_settings["smtp_server"],
+                            smtp_port=email_settings["smtp_port"],
+                            sender_email=email_settings["sender_email"],
+                            sender_password=email_settings["sender_password"],
+                            recipients=email_settings["recipients"],
+                            csv_filepath=filepath,
+                            project=project,
+                            item_count=len(moved_items)
+                        )
+                        if success:
+                            email_msg = "\nEmail sent successfully"
+                        else:
+                            email_msg = f"\nEmail failed: {msg}"
 
-            # Send email if enabled
-            email_msg = ""
-            email_settings = get_email_settings()
-            if email_settings["enabled"] and email_settings["sender_email"] and email_settings["recipients"]:
-                success, msg = send_csv_email(
-                    smtp_server=email_settings["smtp_server"],
-                    smtp_port=email_settings["smtp_port"],
-                    sender_email=email_settings["sender_email"],
-                    sender_password=email_settings["sender_password"],
-                    recipients=email_settings["recipients"],
-                    csv_filepath=filepath,
-                    project=project,
-                    item_count=len(moved_items)
-                )
-                if success:
-                    email_msg = "\nEmail sent successfully"
+                    def show_success():
+                        self._refresh_admin_active_inventory(project)
+                        self._refresh_admin_archived_inventory(project)
+                        self._play_success_sound()
+                        dialog = ctk.CTkToplevel(self)
+                        dialog.title("Export Complete")
+                        dialog.geometry("350x120")
+                        dialog.resizable(False, False)
+                        dialog.transient(self)
+                        ctk.CTkLabel(dialog, text=f"Exported {len(moved_items)} items{email_msg}", font=ctk.CTkFont(size=14)).pack(pady=20)
+                        ctk.CTkButton(dialog, text="OK", width=80, command=dialog.destroy).pack()
+                        dialog.wait_visibility()
+                        dialog.grab_set()
+
+                    self.after(0, show_success)
                 else:
-                    email_msg = f"\nEmail failed: {msg}"
+                    self.after(0, lambda: self._show_admin_status("Failed to export CSV", project, error=True))
+            except Exception as e:
+                self.after(0, lambda: self._show_admin_status(f"Export failed: {str(e)}", project, error=True))
 
-            # Show success dialog
-            dialog = ctk.CTkToplevel(self)
-            dialog.title("Export Complete")
-            dialog.geometry("350x120")
-            dialog.resizable(False, False)
-            dialog.transient(self)
-            ctk.CTkLabel(dialog, text=f"Exported {len(moved_items)} items{email_msg}", font=ctk.CTkFont(size=14)).pack(pady=20)
-            ctk.CTkButton(dialog, text="OK", width=80, command=dialog.destroy).pack()
-            dialog.wait_visibility()
-            dialog.grab_set()
+        threading.Thread(target=do_export, daemon=True).start()
 
     def _export_all_archived_inventory(self, project: str = "ecoflow"):
         """Export ALL archived inventory items from remote database to CSV."""
