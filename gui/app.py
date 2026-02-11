@@ -404,7 +404,7 @@ Start-Sleep -Seconds 3
             repair_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
             repair_frame.pack(side="left", padx=(0, 15))
             ctk.CTkLabel(repair_frame, text="Repair State", font=ctk.CTkFont(size=14)).pack(anchor="w")
-            repair_options = ["Temporary Storage","To be repaired", "To be refurbished","To be Scrapped","Storage only","Good Spare Parts","Refurbished","Repaired"]
+            repair_options = ["Temporary Storage","To be repaired", "To be refurbished","To be Scrapped","Storage only","Good Spare Parts","Refurbished","Repaired","Defective Products"]
             repair_dropdown = ctk.CTkOptionMenu(repair_frame, width=170, values=repair_options, font=ctk.CTkFont(size=14))
             repair_dropdown.set(repair_options[0])
             repair_dropdown.pack()
@@ -690,7 +690,7 @@ Start-Sleep -Seconds 3
 
         # Repair State
         ctk.CTkLabel(frame, text="Repair State", font=ctk.CTkFont(size=14)).pack(anchor="w")
-        repair_options = ["Temporary Storage","To be repaired", "To be refurbished","To be Scrapped","Storage only","Good Spare Parts","Refurbished","Repaired"]
+        repair_options = ["Temporary Storage","To be repaired", "To be refurbished","To be Scrapped","Storage only","Good Spare Parts","Refurbished","Repaired","Defective Products"]
         repair_dropdown = ctk.CTkOptionMenu(frame, width=340, values=repair_options, font=ctk.CTkFont(size=14))
         repair_dropdown.set(item['repair_state'])
         repair_dropdown.pack(pady=(2, 10))
@@ -1444,7 +1444,7 @@ Start-Sleep -Seconds 3
             repair_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
             repair_frame.pack(side="left", padx=(0, 10))
             ctk.CTkLabel(repair_frame, text="Repair State", font=ctk.CTkFont(size=13)).pack(anchor="w")
-            repair_options = ["Temporary Storage", "To be repaired", "To be refurbished", "To be Scrapped", "Storage only", "Good Spare Parts", "Refurbished", "Repaired"]
+            repair_options = ["Temporary Storage", "To be repaired", "To be refurbished", "To be Scrapped", "Storage only", "Good Spare Parts", "Refurbished", "Repaired", "Defective Products"]
             admin_repair_dropdown = ctk.CTkOptionMenu(repair_frame, width=150, values=repair_options, font=ctk.CTkFont(size=13))
             admin_repair_dropdown.set(repair_options[0])
             admin_repair_dropdown.pack()
