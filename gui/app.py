@@ -1058,7 +1058,8 @@ Start-Sleep -Seconds 3
             if po_number:
                 self._show_user_status(f"PO #: {po_number}", project, error=False)
             elif po_number == '':
-                self._show_user_status("Serial not found in lookup", project, error=True)
+                # Show not found message without error sound
+                self.project_widgets[project]['status_label'].configure(text="Serial not found in lookup", text_color="red")
         else:
             # Clear status if not 12 chars
             self.project_widgets[project]['status_label'].configure(text="")
@@ -1073,7 +1074,8 @@ Start-Sleep -Seconds 3
             if po_number:
                 self._show_admin_status(f"PO #: {po_number}", project, error=False)
             elif po_number == '':
-                self._show_admin_status("Serial not found in lookup", project, error=True)
+                # Show not found message without error sound
+                self.admin_project_widgets[project]['status_label'].configure(text="Serial not found in lookup", text_color="red")
         else:
             # Clear status if not 12 chars
             self.admin_project_widgets[project]['status_label'].configure(text="")
