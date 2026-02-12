@@ -237,7 +237,7 @@ def delete_inventory_item_cached(item_id: int, project: str = "ecoflow") -> bool
 
 # ==================== Read Operations (Local Only) ====================
 
-def get_all_inventory_cached(project: str = "ecoflow", limit: int = None) -> list[dict]:
+def get_all_inventory_cached(project: str = "ecoflow", limit: int = None, offset: int = 0) -> list[dict]:
     """Get inventory items from local cache (fast)."""
     conn = None
     try:
@@ -252,6 +252,8 @@ def get_all_inventory_cached(project: str = "ecoflow", limit: int = None) -> lis
         """
         if limit:
             query += f" LIMIT {limit}"
+            if offset:
+                query += f" OFFSET {offset}"
 
         cursor.execute(query)
         rows = cursor.fetchall()
@@ -294,7 +296,7 @@ def get_inventory_count_cached(project: str = "ecoflow") -> int:
             conn.close()
 
 
-def get_all_imported_inventory_cached(project: str = "ecoflow", limit: int = None) -> list[dict]:
+def get_all_imported_inventory_cached(project: str = "ecoflow", limit: int = None, offset: int = 0) -> list[dict]:
     """Get imported inventory from local cache."""
     conn = None
     try:
@@ -309,6 +311,8 @@ def get_all_imported_inventory_cached(project: str = "ecoflow", limit: int = Non
         """
         if limit:
             query += f" LIMIT {limit}"
+            if offset:
+                query += f" OFFSET {offset}"
 
         cursor.execute(query)
         rows = cursor.fetchall()

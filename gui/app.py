@@ -52,6 +52,7 @@ class MainApplication(ctk.CTk):
     FONT_LABEL = ("", 14)
     FONT_LABEL_BOLD = ("", 14, "bold")
     FONT_BUTTON = ("", 14)
+    PAGE_SIZE = 20
 
     def __init__(self, user: dict, on_logout: callable):
         super().__init__()
@@ -489,11 +490,62 @@ Start-Sleep -Seconds 3
         for i in range(num_columns):
             inventory_list_frame.grid_columnconfigure(i, weight=1)
 
+        # Pagination footer
+        page_frame = ctk.CTkFrame(list_frame, fg_color="transparent")
+        page_frame.pack(fill="x", padx=10, pady=(0, 5))
+
+        prev_btn = ctk.CTkButton(
+            page_frame, text="< Previous", width=100, font=ctk.CTkFont(size=13),
+            fg_color="#6c757d", hover_color="#5a6268", state="disabled",
+            command=lambda p=project: self._go_page(p, "default", -1)
+        )
+        prev_btn.pack(side="left")
+
+        page_label = ctk.CTkLabel(page_frame, text="", font=ctk.CTkFont(size=13))
+        page_label.pack(side="left", expand=True)
+
+        next_btn = ctk.CTkButton(
+            page_frame, text="Next >", width=100, font=ctk.CTkFont(size=13),
+            fg_color="#6c757d", hover_color="#5a6268", state="disabled",
+            command=lambda p=project: self._go_page(p, "default", 1)
+        )
+        next_btn.pack(side="right")
+
+        self.project_widgets[project]['current_page'] = 0
+        self.project_widgets[project]['prev_btn'] = prev_btn
+        self.project_widgets[project]['next_btn'] = next_btn
+        self.project_widgets[project]['page_label'] = page_label
+
     def _stop_inventory_polling(self):
         """Stop the inventory polling."""
         if self._refresh_poll_id:
             self.after_cancel(self._refresh_poll_id)
             self._refresh_poll_id = None
+
+    def _reset_and_refresh_inventory(self, project: str):
+        """Reset to page 0 and refresh (used after export clears items)."""
+        self.project_widgets[project]['current_page'] = 0
+        self._refresh_inventory_list(project)
+
+    def _go_page(self, project: str, view_type: str, direction: int):
+        """Navigate pagination: direction is +1 (next) or -1 (previous)."""
+        if view_type == "default":
+            self.project_widgets[project]['current_page'] += direction
+            self._refresh_inventory_list(project)
+        elif view_type == "admin_active":
+            self.admin_project_widgets[project]['active_page'] += direction
+            self._refresh_admin_active_inventory(project)
+        elif view_type == "admin_archived":
+            self.admin_project_widgets[project]['archived_page'] += direction
+            self._refresh_admin_archived_inventory(project)
+
+    def _update_pagination(self, widgets: dict, page_key: str, prev_key: str, next_key: str, label_key: str, page: int, total_count: int):
+        """Update pagination button states and label."""
+        import math
+        total_pages = max(1, math.ceil(total_count / self.PAGE_SIZE))
+        widgets[label_key].configure(text=f"Page {page + 1} of {total_pages}")
+        widgets[prev_key].configure(state="normal" if page > 0 else "disabled")
+        widgets[next_key].configure(state="normal" if page < total_pages - 1 else "disabled")
 
     def _refresh_inventory_list(self, project: str = "ecoflow"):
         """Refresh the inventory list display for a specific project."""
@@ -518,10 +570,12 @@ Start-Sleep -Seconds 3
         loading_label.grid(row=1, column=0, columnspan=10, padx=5, pady=10)
 
         # Fetch data in background thread
+        page = self.project_widgets[project]['current_page']
         def fetch_data():
             try:
                 total_count = get_inventory_count(project)
-                items = get_all_inventory(project, limit=20)  # Limit at database level
+                offset = page * self.PAGE_SIZE
+                items = get_all_inventory(project, limit=self.PAGE_SIZE, offset=offset)
                 # Pre-fetch PO numbers (non-blocking to avoid P: drive delay)
                 for item in items:
                     if project == "halo":
@@ -632,6 +686,13 @@ Start-Sleep -Seconds 3
 
         # Update quantity counter with total database count
         self.project_widgets[project]['inventory_qty_label'].configure(text=f"({total_count} item{'s' if total_count != 1 else ''})")
+
+        # Update pagination buttons
+        page = self.project_widgets[project]['current_page']
+        self._update_pagination(
+            self.project_widgets[project], 'current_page', 'prev_btn', 'next_btn', 'page_label',
+            page, total_count
+        )
 
     def _show_edit_inventory_dialog(self, item: dict, project: str = "ecoflow"):
         """Show dialog to edit an inventory item."""
@@ -973,7 +1034,8 @@ Start-Sleep -Seconds 3
         if widgets['repair_dropdown']:
             widgets['repair_dropdown'].set(widgets['repair_options'][0])
 
-        # Refresh inventory list
+        # Refresh inventory list (reset to page 0 to show new item)
+        self.project_widgets[project]['current_page'] = 0
         self._refresh_inventory_list(project)
 
         # Focus back to first field
@@ -1072,7 +1134,7 @@ Start-Sleep -Seconds 3
                     else:
                         email_msg = f"Exported {len(moved_items)} items and archived"
                     self.after(0, lambda: self._show_user_status(email_msg, project, error=False))
-                    self.after(0, lambda: self._refresh_inventory_list(project))
+                    self.after(0, lambda: self._reset_and_refresh_inventory(project))
                     self.after(0, self._play_success_sound)
                 else:
                     self.after(0, lambda: self._show_user_status("Failed to export CSV", project, error=True))
@@ -1525,6 +1587,32 @@ Start-Sleep -Seconds 3
         for i in range(num_columns):
             admin_active_inventory_frame.grid_columnconfigure(i, weight=1)
 
+        # Pagination footer
+        page_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        page_frame.pack(fill="x", padx=10, pady=(0, 5))
+
+        prev_btn = ctk.CTkButton(
+            page_frame, text="< Previous", width=100, font=ctk.CTkFont(size=13),
+            fg_color="#6c757d", hover_color="#5a6268", state="disabled",
+            command=lambda p=project: self._go_page(p, "admin_active", -1)
+        )
+        prev_btn.pack(side="left")
+
+        page_label = ctk.CTkLabel(page_frame, text="", font=ctk.CTkFont(size=13))
+        page_label.pack(side="left", expand=True)
+
+        next_btn = ctk.CTkButton(
+            page_frame, text="Next >", width=100, font=ctk.CTkFont(size=13),
+            fg_color="#6c757d", hover_color="#5a6268", state="disabled",
+            command=lambda p=project: self._go_page(p, "admin_active", 1)
+        )
+        next_btn.pack(side="right")
+
+        self.admin_project_widgets[project]['active_page'] = 0
+        self.admin_project_widgets[project]['active_prev_btn'] = prev_btn
+        self.admin_project_widgets[project]['active_next_btn'] = next_btn
+        self.admin_project_widgets[project]['active_page_label'] = page_label
+
     def _create_archived_inventory_view(self, parent, project: str = "ecoflow"):
         """Create the archived inventory view for a specific project."""
         # Header with refresh button
@@ -1580,6 +1668,32 @@ Start-Sleep -Seconds 3
         num_columns = 8 if project != "halo" else 7
         for i in range(num_columns):
             admin_archived_inventory_frame.grid_columnconfigure(i, weight=1)
+
+        # Pagination footer
+        page_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        page_frame.pack(fill="x", padx=10, pady=(0, 5))
+
+        prev_btn = ctk.CTkButton(
+            page_frame, text="< Previous", width=100, font=ctk.CTkFont(size=13),
+            fg_color="#6c757d", hover_color="#5a6268", state="disabled",
+            command=lambda p=project: self._go_page(p, "admin_archived", -1)
+        )
+        prev_btn.pack(side="left")
+
+        page_label = ctk.CTkLabel(page_frame, text="", font=ctk.CTkFont(size=13))
+        page_label.pack(side="left", expand=True)
+
+        next_btn = ctk.CTkButton(
+            page_frame, text="Next >", width=100, font=ctk.CTkFont(size=13),
+            fg_color="#6c757d", hover_color="#5a6268", state="disabled",
+            command=lambda p=project: self._go_page(p, "admin_archived", 1)
+        )
+        next_btn.pack(side="right")
+
+        self.admin_project_widgets[project]['archived_page'] = 0
+        self.admin_project_widgets[project]['archived_prev_btn'] = prev_btn
+        self.admin_project_widgets[project]['archived_next_btn'] = next_btn
+        self.admin_project_widgets[project]['archived_page_label'] = page_label
 
     def _create_email_settings_tab(self, parent):
         """Create the email settings configuration tab."""
@@ -1761,10 +1875,12 @@ Start-Sleep -Seconds 3
         loading_label.grid(row=1, column=0, columnspan=8, padx=5, pady=10)
 
         # Fetch data in background thread
+        page = self.admin_project_widgets[project]['active_page']
         def fetch_data():
             try:
                 total_count = get_inventory_count(project)
-                items = get_all_inventory(project, limit=20)  # Limit at database level
+                offset = page * self.PAGE_SIZE
+                items = get_all_inventory(project, limit=self.PAGE_SIZE, offset=offset)
                 for item in items:
                     if project == "halo":
                         item['_po_number'] = lookup_halo_po_number(item['serial_number'], blocking=False) or ''
@@ -1853,6 +1969,13 @@ Start-Sleep -Seconds 3
         # Update quantity counter with total database count
         self.admin_project_widgets[project]['active_inventory_qty_label'].configure(text=f"({total_count} item{'s' if total_count != 1 else ''})")
 
+        # Update pagination buttons
+        page = self.admin_project_widgets[project]['active_page']
+        self._update_pagination(
+            self.admin_project_widgets[project], 'active_page', 'active_prev_btn', 'active_next_btn', 'active_page_label',
+            page, total_count
+        )
+
     def _refresh_admin_archived_inventory(self, project: str = "ecoflow"):
         """Refresh the admin archived inventory list for a specific project."""
         admin_archived_inventory_frame = self.admin_project_widgets[project]['archived_inventory_frame']
@@ -1874,10 +1997,12 @@ Start-Sleep -Seconds 3
         loading_label.grid(row=1, column=0, columnspan=8, padx=5, pady=10)
 
         # Fetch data in background thread
+        page = self.admin_project_widgets[project]['archived_page']
         def fetch_data():
             try:
                 total_count = get_imported_inventory_count(project)
-                items = get_all_imported_inventory(project, limit=20)  # Limit at database level
+                offset = page * self.PAGE_SIZE
+                items = get_all_imported_inventory(project, limit=self.PAGE_SIZE, offset=offset)
                 for item in items:
                     if project == "halo":
                         item['_po_number'] = lookup_halo_po_number(item['serial_number'], blocking=False) or ''
@@ -1945,6 +2070,13 @@ Start-Sleep -Seconds 3
             archived_str = item['imported_at'].replace('T', ' ')[:16] if 'T' in item['imported_at'] else item['imported_at'][:16]
             ctk.CTkLabel(admin_archived_inventory_frame, text=archived_str, font=ctk.CTkFont(size=13)).grid(
                 row=row, column=col, padx=5, pady=3, sticky="w")
+
+        # Update pagination buttons
+        page = self.admin_project_widgets[project]['archived_page']
+        self._update_pagination(
+            self.admin_project_widgets[project], 'archived_page', 'archived_prev_btn', 'archived_next_btn', 'archived_page_label',
+            page, total_count
+        )
 
     def _show_admin_edit_inventory_dialog(self, item: dict, project: str = "ecoflow"):
         """Show dialog to edit an inventory item from admin view."""
@@ -2160,6 +2292,8 @@ Start-Sleep -Seconds 3
                             email_msg = f"\nEmail failed: {msg}"
 
                     def show_success():
+                        self.admin_project_widgets[project]['active_page'] = 0
+                        self.admin_project_widgets[project]['archived_page'] = 0
                         self._refresh_admin_active_inventory(project)
                         self._refresh_admin_archived_inventory(project)
                         self._play_success_sound()
@@ -2471,7 +2605,8 @@ Start-Sleep -Seconds 3
         if widgets['repair_dropdown']:
             widgets['repair_dropdown'].set(widgets['repair_options'][0])
 
-        # Refresh inventory list
+        # Refresh inventory list (reset to page 0 to show new item)
+        self.admin_project_widgets[project]['active_page'] = 0
         self._refresh_admin_active_inventory(project)
 
         # Focus back to first field
