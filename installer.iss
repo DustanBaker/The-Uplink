@@ -7,7 +7,7 @@
 ; 3. Click Build -> Compile
 
 #define MyAppName "The-Uplink"
-#define MyAppVersion "1.0.14"
+#define MyAppVersion "1.0.17"
 #define MyAppPublisher "Your Company"
 #define MyAppURL "https://yourwebsite.com"
 #define MyAppExeName "The-Uplink.exe"

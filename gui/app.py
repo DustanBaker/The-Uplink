@@ -1,5 +1,5 @@
 import customtkinter as ctk
-from tkinter import filedialog
+from tkinter import filedialog, messagebox
 from PIL import Image, ImageTk
 import os
 import csv
@@ -17,6 +17,8 @@ from database.inventory_cache import (
     add_inventory_item_cached as add_inventory_item,
     get_all_inventory_cached as get_all_inventory,
     get_inventory_count_cached as get_inventory_count,
+    search_inventory_cached as search_inventory,
+    search_inventory_count_cached as search_inventory_count,
     update_inventory_item_cached as update_inventory_item,
     delete_inventory_item_cached as delete_inventory_item,
     get_all_imported_inventory_cached as get_all_imported_inventory,
@@ -24,7 +26,9 @@ from database.inventory_cache import (
     move_to_imported_cached as move_inventory_to_imported,
     init_inventory_cache,
     start_inventory_sync,
-    stop_inventory_sync
+    stop_inventory_sync,
+    save_csv_serials,
+    get_csv_serials
 )
 from database.sku_cache import (
     add_sku_cached as add_sku,
@@ -374,11 +378,22 @@ Start-Sleep -Seconds 3
             order_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
             order_frame.pack(side="left", padx=(0, 15))
             ctk.CTkLabel(order_frame, text="Order #", font=ctk.CTkFont(size=14)).pack(anchor="w")
-            order_entry = ctk.CTkEntry(order_frame, width=120, font=ctk.CTkFont(size=14))
+            order_entry = ctk.CTkEntry(order_frame, width=100, font=ctk.CTkFont(size=14))
             order_entry.pack()
             self.project_widgets[project]['order_entry'] = order_entry
         else:
             self.project_widgets[project]['order_entry'] = None
+
+        # PO # (EcoFlow only)
+        if project == "ecoflow":
+            tracking_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
+            tracking_frame.pack(side="left", padx=(0, 15))
+            ctk.CTkLabel(tracking_frame, text="Tracking #", font=ctk.CTkFont(size=14)).pack(anchor="w")
+            tracking_entry = ctk.CTkEntry(tracking_frame, width=120, font=ctk.CTkFont(size=14))
+            tracking_entry.pack()
+            self.project_widgets[project]['tracking_entry'] = tracking_entry
+        else:
+            self.project_widgets[project]['tracking_entry'] = None
 
         # Location (dropdown for halo/ecoflow, text entry for ams_ine)
         location_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
@@ -480,6 +495,23 @@ Start-Sleep -Seconds 3
         )
         export_button.pack(side="right")
 
+        # Search bar
+        search_frame = ctk.CTkFrame(list_frame, fg_color="transparent")
+        search_frame.pack(fill="x", padx=20, pady=(0, 5))
+
+        ctk.CTkLabel(search_frame, text="Search:", font=ctk.CTkFont(size=14)).pack(side="left", padx=(0, 10))
+        search_entry = ctk.CTkEntry(search_frame, width=300, font=ctk.CTkFont(size=14), placeholder_text="Filter by SKU, Serial, LPN, etc...")
+        search_entry.pack(side="left", padx=(0, 10))
+        search_entry.bind("<KeyRelease>", lambda e, p=project: self._filter_inventory_list(p))
+        self.project_widgets[project]['search_entry'] = search_entry
+
+        clear_search_btn = ctk.CTkButton(
+            search_frame, text="Clear", width=60, font=ctk.CTkFont(size=13),
+            fg_color="#6c757d", hover_color="#5a6268",
+            command=lambda p=project: self._clear_inventory_search(p)
+        )
+        clear_search_btn.pack(side="left")
+
         # Scrollable frame for inventory list
         inventory_list_frame = ctk.CTkScrollableFrame(list_frame)
         inventory_list_frame.pack(expand=True, fill="both", padx=10, pady=(0, 10))
@@ -555,8 +587,11 @@ Start-Sleep -Seconds 3
         for widget in inventory_list_frame.winfo_children():
             widget.destroy()
 
-        # Header row - include PO # for both projects (between LPN and Location)
-        headers = ["SKU", "Serial Number", "LPN", "PO #", "Location", "Repair State", "Entered By", "Date", "", ""]
+        # Header row
+        if project == "halo":
+            headers = ["SKU", "Serial Number", "LPN", "PO #", "Location", "Repair State", "Entered By", "Date", "", ""]
+        else:
+            headers = ["SKU", "Serial Number", "LPN", "Order #", "PO #", "Location", "Repair State", "Entered By", "Date", "", ""]
         for col, header in enumerate(headers):
             label = ctk.CTkLabel(
                 inventory_list_frame,
@@ -571,17 +606,23 @@ Start-Sleep -Seconds 3
 
         # Fetch data in background thread
         page = self.project_widgets[project]['current_page']
+        search_term = self.project_widgets[project]['search_entry'].get().strip()
         def fetch_data():
             try:
-                total_count = get_inventory_count(project)
-                offset = page * self.PAGE_SIZE
-                items = get_all_inventory(project, limit=self.PAGE_SIZE, offset=offset)
+                if search_term:
+                    total_count = search_inventory_count(search_term, project)
+                    offset = page * self.PAGE_SIZE
+                    items = search_inventory(search_term, project, limit=self.PAGE_SIZE, offset=offset)
+                else:
+                    total_count = get_inventory_count(project)
+                    offset = page * self.PAGE_SIZE
+                    items = get_all_inventory(project, limit=self.PAGE_SIZE, offset=offset)
                 # Pre-fetch PO numbers (non-blocking to avoid P: drive delay)
                 for item in items:
                     if project == "halo":
                         item['_po_number'] = lookup_halo_po_number(item['serial_number'], blocking=False) or ''
                     else:
-                        item['_po_number'] = item.get('order_number', '')
+                        item['_po_number'] = item.get('tracking_number', '')
                 # Update GUI on main thread
                 self.after(0, lambda: self._populate_inventory_list(project, items, total_count))
             except Exception:
@@ -592,6 +633,41 @@ Start-Sleep -Seconds 3
 
         thread = threading.Thread(target=fetch_data, daemon=True)
         thread.start()
+
+    def _filter_inventory_list(self, project: str = "ecoflow"):
+        """Filter inventory list based on search entry."""
+        self.project_widgets[project]['current_page'] = 0
+        self._refresh_inventory_list(project)
+
+    def _clear_inventory_search(self, project: str = "ecoflow"):
+        """Clear search and refresh inventory list."""
+        self.project_widgets[project]['search_entry'].delete(0, 'end')
+        self.project_widgets[project]['current_page'] = 0
+        self._refresh_inventory_list(project)
+
+    def _filter_admin_inventory_list(self, project: str = "ecoflow"):
+        """Filter admin active inventory list based on search entry."""
+        self.admin_project_widgets[project]['active_page'] = 0
+        self._refresh_admin_active_inventory(project)
+
+    def _clear_admin_inventory_search(self, project: str = "ecoflow"):
+        """Clear admin search and refresh inventory list."""
+        self.admin_project_widgets[project]['search_entry'].delete(0, 'end')
+        self.admin_project_widgets[project]['active_page'] = 0
+        self._refresh_admin_active_inventory(project)
+
+    def _highlight_inventory_row(self, row_labels: list, all_rows: list):
+        """Highlight a clicked inventory row and unhighlight the previous one."""
+        for prev_labels in all_rows:
+            for lbl in prev_labels:
+                if lbl.winfo_exists():
+                    if getattr(lbl, '_is_duplicate', False):
+                        lbl.configure(fg_color="transparent", text_color="red")
+                    else:
+                        lbl.configure(fg_color="transparent", text_color=("gray10", "gray90"))
+        for lbl in row_labels:
+            if lbl.winfo_exists():
+                lbl.configure(fg_color="#1f6aa5", text_color="white")
 
     def _show_inventory_error(self, frame, message: str):
         """Show an error message in an inventory frame."""
@@ -620,7 +696,10 @@ Start-Sleep -Seconds 3
             widget.destroy()
 
         # Header row
-        headers = ["SKU", "Serial Number", "LPN", "PO #", "Location", "Repair State", "Entered By", "Date", "", ""]
+        if project == "halo":
+            headers = ["SKU", "Serial Number", "LPN", "PO #", "Location", "Repair State", "Entered By", "Date", "", ""]
+        else:
+            headers = ["SKU", "Serial Number", "LPN", "Order #", "PO #", "Location", "Repair State", "Entered By", "Date", "", ""]
         for col, header in enumerate(headers):
             label = ctk.CTkLabel(
                 inventory_list_frame,
@@ -629,35 +708,64 @@ Start-Sleep -Seconds 3
             )
             label.grid(row=0, column=col, padx=5, pady=(0, 10), sticky="w")
 
+        # Load CSV serials for duplicate detection (Halo only)
+        csv_serial_set = get_csv_serials(project) if project in ("halo", "ecoflow") else set()
+
         # Inventory rows
+        all_row_labels = []
         for row, item in enumerate(items, start=1):
+            is_duplicate = csv_serial_set and item['serial_number'] in csv_serial_set
+            row_color = "red" if is_duplicate else ("gray10", "gray90")
+            row_font = ctk.CTkFont(size=14)
+
+            row_labels = []
             col = 0
-            ctk.CTkLabel(inventory_list_frame, text=item['item_sku'], font=ctk.CTkFont(size=14)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(inventory_list_frame, text=item['item_sku'], font=row_font, text_color=row_color)
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
-            ctk.CTkLabel(inventory_list_frame, text=item['serial_number'], font=ctk.CTkFont(size=14)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(inventory_list_frame, text=item['serial_number'], font=row_font, text_color=row_color)
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
-            ctk.CTkLabel(inventory_list_frame, text=item['lpn'], font=ctk.CTkFont(size=14)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(inventory_list_frame, text=item['lpn'], font=row_font, text_color=row_color)
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
-            ctk.CTkLabel(inventory_list_frame, text=item['_po_number'], font=ctk.CTkFont(size=14)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            if project != "halo":
+                lbl = ctk.CTkLabel(inventory_list_frame, text=item.get('order_number', ''), font=row_font, text_color=row_color)
+                lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+                row_labels.append(lbl)
+                col += 1
+            lbl = ctk.CTkLabel(inventory_list_frame, text=item['_po_number'], font=row_font, text_color=row_color)
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
-            ctk.CTkLabel(inventory_list_frame, text=item.get('location', ''), font=ctk.CTkFont(size=14)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(inventory_list_frame, text=item.get('location', ''), font=row_font, text_color=row_color)
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
-            ctk.CTkLabel(inventory_list_frame, text=item['repair_state'], font=ctk.CTkFont(size=14)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(inventory_list_frame, text=item['repair_state'], font=row_font, text_color=row_color)
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
-            ctk.CTkLabel(inventory_list_frame, text=item['entered_by'], font=ctk.CTkFont(size=14)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(inventory_list_frame, text=item['entered_by'], font=row_font, text_color=row_color)
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
-            # Format date
             date_str = item['created_at'].replace('T', ' ')[:16] if 'T' in item['created_at'] else item['created_at'][:16]
-            ctk.CTkLabel(inventory_list_frame, text=date_str, font=ctk.CTkFont(size=14)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(inventory_list_frame, text=date_str, font=row_font, text_color=row_color)
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
+
+            if is_duplicate:
+                for lbl in row_labels:
+                    lbl._is_duplicate = True
+
+            all_row_labels.append(row_labels)
+            for lbl in row_labels:
+                lbl.bind("<Button-1>", lambda e, rl=row_labels, ar=all_row_labels: self._highlight_inventory_row(rl, ar))
 
             # Edit button
             edit_btn = ctk.CTkButton(
@@ -698,7 +806,7 @@ Start-Sleep -Seconds 3
         """Show dialog to edit an inventory item."""
         dialog = ctk.CTkToplevel(self)
         dialog.title(f"Edit Item - {item['item_sku']}")
-        dialog_height = 510 if project != "halo" else 450
+        dialog_height = 560 if project == "ecoflow" else (510 if project != "halo" else 450)
         dialog.geometry(f"400x{dialog_height}")
         dialog.resizable(False, False)
         dialog.transient(self)
@@ -749,6 +857,14 @@ Start-Sleep -Seconds 3
             order_entry.insert(0, item.get('order_number', ''))
             order_entry.pack(pady=(2, 8))
 
+        # PO # (EcoFlow only)
+        tracking_entry = None
+        if project == "ecoflow":
+            ctk.CTkLabel(frame, text="PO #", font=ctk.CTkFont(size=14)).pack(anchor="w")
+            tracking_entry = ctk.CTkEntry(frame, width=340, font=ctk.CTkFont(size=14))
+            tracking_entry.insert(0, item.get('tracking_number', ''))
+            tracking_entry.pack(pady=(2, 8))
+
         # Repair State
         ctk.CTkLabel(frame, text="Repair State", font=ctk.CTkFont(size=14)).pack(anchor="w")
         repair_options = ["Temporary Storage","To be repaired", "To be refurbished","To be Scrapped","Storage only","Good Spare Parts","Refurbished","Repaired","Defective Products"]
@@ -766,6 +882,7 @@ Start-Sleep -Seconds 3
             lpn = lpn_entry.get().strip()
             repair_state = repair_dropdown.get()
             order_number = order_entry.get().strip() if order_entry else ""
+            tracking_number = tracking_entry.get().strip() if tracking_entry else ""
 
             if not sku or not serial or not lpn:
                 status_label.configure(text="All fields are required")
@@ -778,7 +895,7 @@ Start-Sleep -Seconds 3
                 self._play_error_sound()
                 return
 
-            if update_inventory_item(item['id'], sku, serial, lpn, item.get('location', ''), repair_state, project, order_number):
+            if update_inventory_item(item['id'], sku, serial, lpn, item.get('location', ''), repair_state, project, order_number, tracking_number):
                 dialog.destroy()
                 self._refresh_inventory_list(project)
                 self._show_user_status("Item updated successfully", project, error=False)
@@ -977,6 +1094,7 @@ Start-Sleep -Seconds 3
         location = widgets['location_dropdown'].get()
         repair_state = widgets['repair_dropdown'].get() if widgets['repair_dropdown'] else ""
         order_number = widgets['order_entry'].get().strip() if widgets['order_entry'] else ""
+        tracking_number = widgets['tracking_entry'].get().strip() if widgets['tracking_entry'] else ""
 
         # Basic validation
         if not sku:
@@ -1017,7 +1135,8 @@ Start-Sleep -Seconds 3
                 repair_state=repair_state,
                 entered_by=self.user['username'],
                 project=project,
-                order_number=order_number
+                order_number=order_number,
+                tracking_number=tracking_number
             )
             self._show_user_status("Entry submitted successfully", project, error=False)
             self._play_success_sound()
@@ -1031,6 +1150,8 @@ Start-Sleep -Seconds 3
         widgets['lpn_entry'].delete(0, 'end')
         if widgets['order_entry']:
             widgets['order_entry'].delete(0, 'end')
+        if widgets['tracking_entry']:
+            widgets['tracking_entry'].delete(0, 'end')
         if widgets['repair_dropdown']:
             widgets['repair_dropdown'].set(widgets['repair_options'][0])
 
@@ -1079,6 +1200,68 @@ Start-Sleep -Seconds 3
         else:
             # Clear status if not 12 chars
             self.admin_project_widgets[project]['status_label'].configure(text="")
+
+    def _handle_upload_client_csv(self, project: str):
+        """Handle uploading a client inventory CSV for duplicate serial detection."""
+        project_label = project.capitalize()
+        filepath = filedialog.askopenfilename(
+            title=f"Upload {project_label} Client Inventory Report",
+            filetypes=[("CSV files", "*.csv"), ("All files", "*.*")]
+        )
+        if not filepath:
+            return
+
+        admin_status = self.admin_project_widgets[project].get('status_label')
+        if admin_status:
+            admin_status.configure(text="Uploading CSV...", text_color="green")
+
+        def do_upload():
+            try:
+                serials = []
+                with open(filepath, 'r', encoding='utf-8-sig') as f:
+                    reader = csv.reader(f)
+                    next(reader, None)  # Skip header row
+                    for row in reader:
+                        if len(row) > 9 and row[9].strip():
+                            serials.append(row[9].strip())
+
+                save_csv_serials(serials, project)
+
+                # Get active inventory serials to find duplicates
+                active_items = get_all_inventory(project)
+                active_serials = {item['serial_number'] for item in active_items}
+                csv_serial_set = set(serials)
+                duplicates = active_serials & csv_serial_set
+
+                def update_ui():
+                    self._refresh_admin_active_inventory(project)
+                    self._refresh_inventory_list(project)
+                    if duplicates:
+                        if admin_status:
+                            admin_status.configure(
+                                text=f"CSV uploaded — {len(duplicates)} duplicate serial(s) found",
+                                text_color="red"
+                            )
+                        messagebox.showwarning(
+                            "Duplicate Serial Numbers",
+                            f"Found {len(duplicates)} serial number(s) already in client inventory.\n\n"
+                            f"These are highlighted in red on the inventory list."
+                        )
+                    else:
+                        if admin_status:
+                            admin_status.configure(
+                                text=f"CSV uploaded — {len(serials)} serials loaded, no duplicates",
+                                text_color="green"
+                            )
+
+                self.after(0, update_ui)
+
+            except Exception as e:
+                self.after(0, lambda: admin_status.configure(
+                    text=f"CSV upload failed: {e}", text_color="red"
+                ) if admin_status else None)
+
+        threading.Thread(target=do_upload, daemon=True).start()
 
     def _handle_export_inventory(self, project: str = "ecoflow"):
         """Handle export and archive of inventory."""
@@ -1483,6 +1666,17 @@ Start-Sleep -Seconds 3
         else:
             self.admin_project_widgets[project]['order_entry'] = None
 
+        # PO # (EcoFlow only)
+        if project == "ecoflow":
+            tracking_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
+            tracking_frame.pack(side="left", padx=(0, 10))
+            ctk.CTkLabel(tracking_frame, text="PO #", font=ctk.CTkFont(size=13)).pack(anchor="w")
+            admin_tracking_entry = ctk.CTkEntry(tracking_frame, width=100, font=ctk.CTkFont(size=13))
+            admin_tracking_entry.pack()
+            self.admin_project_widgets[project]['tracking_entry'] = admin_tracking_entry
+        else:
+            self.admin_project_widgets[project]['tracking_entry'] = None
+
         # Location (dropdown for halo/ecoflow, text entry for ams_ine)
         location_frame = ctk.CTkFrame(fields_frame, fg_color="transparent")
         location_frame.pack(side="left", padx=(0, 10))
@@ -1578,6 +1772,36 @@ Start-Sleep -Seconds 3
             command=lambda p=project: self._handle_admin_export_inventory(p)
         )
         export_btn.pack(side="right")
+
+        # Upload CSV button — for duplicate serial detection
+        if project in ("halo", "ecoflow"):
+            upload_csv_button = ctk.CTkButton(
+                header_frame,
+                text="Upload CSV",
+                width=120,
+                font=ctk.CTkFont(size=14),
+                fg_color="#e67e22",
+                hover_color="#d35400",
+                command=lambda p=project: self._handle_upload_client_csv(p)
+            )
+            upload_csv_button.pack(side="right", padx=(10, 0))
+
+        # Search bar
+        search_frame = ctk.CTkFrame(parent, fg_color="transparent")
+        search_frame.pack(fill="x", padx=10, pady=(0, 5))
+
+        ctk.CTkLabel(search_frame, text="Search:", font=ctk.CTkFont(size=13)).pack(side="left", padx=(0, 10))
+        admin_search_entry = ctk.CTkEntry(search_frame, width=300, font=ctk.CTkFont(size=13), placeholder_text="Filter by SKU, Serial, LPN, etc...")
+        admin_search_entry.pack(side="left", padx=(0, 10))
+        admin_search_entry.bind("<KeyRelease>", lambda e, p=project: self._filter_admin_inventory_list(p))
+        self.admin_project_widgets[project]['search_entry'] = admin_search_entry
+
+        clear_search_btn = ctk.CTkButton(
+            search_frame, text="Clear", width=60, font=ctk.CTkFont(size=13),
+            fg_color="#6c757d", hover_color="#5a6268",
+            command=lambda p=project: self._clear_admin_inventory_search(p)
+        )
+        clear_search_btn.pack(side="left")
 
         # Scrollable frame for inventory list
         admin_active_inventory_frame = ctk.CTkScrollableFrame(parent)
@@ -1863,7 +2087,10 @@ Start-Sleep -Seconds 3
             widget.destroy()
 
         # Header row
-        headers = ["SKU", "Serial Number", "LPN", "PO #", "Repair State", "Entered By", "Date", "Actions"]
+        if project == "halo":
+            headers = ["SKU", "Serial Number", "LPN", "PO #", "Repair State", "Entered By", "Date", "Actions"]
+        else:
+            headers = ["SKU", "Serial Number", "LPN", "Order #", "PO #", "Repair State", "Entered By", "Date", "Actions"]
         for col, header in enumerate(headers):
             label = ctk.CTkLabel(
                 admin_active_inventory_frame,
@@ -1874,20 +2101,27 @@ Start-Sleep -Seconds 3
 
         # Show loading message
         loading_label = ctk.CTkLabel(admin_active_inventory_frame, text="Loading...", font=ctk.CTkFont(size=13))
-        loading_label.grid(row=1, column=0, columnspan=8, padx=5, pady=10)
+        loading_label.grid(row=1, column=0, columnspan=len(headers), padx=5, pady=10)
 
         # Fetch data in background thread
         page = self.admin_project_widgets[project]['active_page']
+        search_term = self.admin_project_widgets[project].get('search_entry')
+        search_term = search_term.get().strip() if search_term else ''
         def fetch_data():
             try:
-                total_count = get_inventory_count(project)
-                offset = page * self.PAGE_SIZE
-                items = get_all_inventory(project, limit=self.PAGE_SIZE, offset=offset)
+                if search_term:
+                    total_count = search_inventory_count(search_term, project)
+                    offset = page * self.PAGE_SIZE
+                    items = search_inventory(search_term, project, limit=self.PAGE_SIZE, offset=offset)
+                else:
+                    total_count = get_inventory_count(project)
+                    offset = page * self.PAGE_SIZE
+                    items = get_all_inventory(project, limit=self.PAGE_SIZE, offset=offset)
                 for item in items:
                     if project == "halo":
                         item['_po_number'] = lookup_halo_po_number(item['serial_number'], blocking=False) or ''
                     else:
-                        item['_po_number'] = item.get('order_number', '')
+                        item['_po_number'] = item.get('tracking_number', '')
                 self.after(0, lambda: self._populate_admin_active_inventory(project, items, total_count))
             except Exception:
                 self.after(0, lambda: self._show_inventory_error(
@@ -1909,7 +2143,10 @@ Start-Sleep -Seconds 3
             widget.destroy()
 
         # Header row
-        headers = ["SKU", "Serial Number", "LPN", "PO #", "Repair State", "Entered By", "Date", "Actions"]
+        if project == "halo":
+            headers = ["SKU", "Serial Number", "LPN", "PO #", "Repair State", "Entered By", "Date", "Actions"]
+        else:
+            headers = ["SKU", "Serial Number", "LPN", "Order #", "PO #", "Repair State", "Entered By", "Date", "Actions"]
         for col, header in enumerate(headers):
             label = ctk.CTkLabel(
                 admin_active_inventory_frame,
@@ -1918,30 +2155,59 @@ Start-Sleep -Seconds 3
             )
             label.grid(row=0, column=col, padx=5, pady=(0, 10), sticky="w")
 
+        # Load CSV serials for duplicate detection (Halo only)
+        csv_serial_set_admin = get_csv_serials(project) if project in ("halo", "ecoflow") else set()
+
+        all_row_labels = []
         for row, item in enumerate(items, start=1):
+            is_dup = csv_serial_set_admin and item['serial_number'] in csv_serial_set_admin
+            row_color = "red" if is_dup else ("gray10", "gray90")
+            row_font = ctk.CTkFont(size=13)
+
+            row_labels = []
             col = 0
-            ctk.CTkLabel(admin_active_inventory_frame, text=item['item_sku'], font=ctk.CTkFont(size=13)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(admin_active_inventory_frame, text=item['item_sku'], font=row_font, text_color=row_color)
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
-            ctk.CTkLabel(admin_active_inventory_frame, text=item['serial_number'], font=ctk.CTkFont(size=13)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(admin_active_inventory_frame, text=item['serial_number'], font=row_font, text_color=row_color)
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
-            ctk.CTkLabel(admin_active_inventory_frame, text=item['lpn'], font=ctk.CTkFont(size=13)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(admin_active_inventory_frame, text=item['lpn'], font=row_font, text_color=row_color)
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
-            ctk.CTkLabel(admin_active_inventory_frame, text=item['_po_number'], font=ctk.CTkFont(size=13)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            if project != "halo":
+                lbl = ctk.CTkLabel(admin_active_inventory_frame, text=item.get('order_number', ''), font=row_font, text_color=row_color)
+                lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+                row_labels.append(lbl)
+                col += 1
+            lbl = ctk.CTkLabel(admin_active_inventory_frame, text=item['_po_number'], font=row_font, text_color=row_color)
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
-            ctk.CTkLabel(admin_active_inventory_frame, text=item['repair_state'], font=ctk.CTkFont(size=13)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(admin_active_inventory_frame, text=item['repair_state'], font=row_font, text_color=row_color)
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
-            ctk.CTkLabel(admin_active_inventory_frame, text=item['entered_by'], font=ctk.CTkFont(size=13)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(admin_active_inventory_frame, text=item['entered_by'], font=row_font, text_color=row_color)
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
             date_str = item['created_at'].replace('T', ' ')[:16] if 'T' in item['created_at'] else item['created_at'][:16]
-            ctk.CTkLabel(admin_active_inventory_frame, text=date_str, font=ctk.CTkFont(size=13)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(admin_active_inventory_frame, text=date_str, font=row_font, text_color=row_color)
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
+
+            if is_dup:
+                for lbl in row_labels:
+                    lbl._is_duplicate = True
+
+            all_row_labels.append(row_labels)
+            for lbl in row_labels:
+                lbl.bind("<Button-1>", lambda e, rl=row_labels, ar=all_row_labels: self._highlight_inventory_row(rl, ar))
 
             action_frame = ctk.CTkFrame(admin_active_inventory_frame, fg_color="transparent")
             action_frame.grid(row=row, column=col, padx=2, pady=3, sticky="w")
@@ -1985,7 +2251,10 @@ Start-Sleep -Seconds 3
             widget.destroy()
 
         # Header row
-        headers = ["SKU", "Serial Number", "LPN", "PO #", "Repair State", "Entered By", "Created", "Archived"]
+        if project == "halo":
+            headers = ["SKU", "Serial Number", "LPN", "PO #", "Repair State", "Entered By", "Created", "Archived"]
+        else:
+            headers = ["SKU", "Serial Number", "LPN", "Order #", "PO #", "Repair State", "Entered By", "Created", "Archived"]
         for col, header in enumerate(headers):
             label = ctk.CTkLabel(
                 admin_archived_inventory_frame,
@@ -1996,7 +2265,7 @@ Start-Sleep -Seconds 3
 
         # Show loading message
         loading_label = ctk.CTkLabel(admin_archived_inventory_frame, text="Loading...", font=ctk.CTkFont(size=13))
-        loading_label.grid(row=1, column=0, columnspan=8, padx=5, pady=10)
+        loading_label.grid(row=1, column=0, columnspan=len(headers), padx=5, pady=10)
 
         # Fetch data in background thread
         page = self.admin_project_widgets[project]['archived_page']
@@ -2009,7 +2278,7 @@ Start-Sleep -Seconds 3
                     if project == "halo":
                         item['_po_number'] = lookup_halo_po_number(item['serial_number'], blocking=False) or ''
                     else:
-                        item['_po_number'] = item.get('order_number', '')
+                        item['_po_number'] = item.get('tracking_number', '')
                 self.after(0, lambda: self._populate_admin_archived_inventory(project, items, total_count))
             except Exception as e:
                 self.after(0, lambda: self._show_inventory_error(
@@ -2036,7 +2305,10 @@ Start-Sleep -Seconds 3
             qty_label.configure(text=f"({total_count} item{'s' if total_count != 1 else ''})")
 
         # Header row
-        headers = ["SKU", "Serial Number", "LPN", "PO #", "Repair State", "Entered By", "Created", "Archived"]
+        if project == "halo":
+            headers = ["SKU", "Serial Number", "LPN", "PO #", "Repair State", "Entered By", "Created", "Archived"]
+        else:
+            headers = ["SKU", "Serial Number", "LPN", "Order #", "PO #", "Repair State", "Entered By", "Created", "Archived"]
         for col, header in enumerate(headers):
             label = ctk.CTkLabel(
                 admin_archived_inventory_frame,
@@ -2045,33 +2317,52 @@ Start-Sleep -Seconds 3
             )
             label.grid(row=0, column=col, padx=5, pady=(0, 10), sticky="w")
 
+        all_row_labels = []
         for row, item in enumerate(items, start=1):
+            row_labels = []
             col = 0
-            ctk.CTkLabel(admin_archived_inventory_frame, text=item['item_sku'], font=ctk.CTkFont(size=13)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(admin_archived_inventory_frame, text=item['item_sku'], font=ctk.CTkFont(size=13))
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
-            ctk.CTkLabel(admin_archived_inventory_frame, text=item['serial_number'], font=ctk.CTkFont(size=13)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(admin_archived_inventory_frame, text=item['serial_number'], font=ctk.CTkFont(size=13))
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
-            ctk.CTkLabel(admin_archived_inventory_frame, text=item['lpn'], font=ctk.CTkFont(size=13)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(admin_archived_inventory_frame, text=item['lpn'], font=ctk.CTkFont(size=13))
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
-            ctk.CTkLabel(admin_archived_inventory_frame, text=item['_po_number'], font=ctk.CTkFont(size=13)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            if project != "halo":
+                lbl = ctk.CTkLabel(admin_archived_inventory_frame, text=item.get('order_number', ''), font=ctk.CTkFont(size=13))
+                lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+                row_labels.append(lbl)
+                col += 1
+            lbl = ctk.CTkLabel(admin_archived_inventory_frame, text=item['_po_number'], font=ctk.CTkFont(size=13))
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
-            ctk.CTkLabel(admin_archived_inventory_frame, text=item['repair_state'], font=ctk.CTkFont(size=13)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(admin_archived_inventory_frame, text=item['repair_state'], font=ctk.CTkFont(size=13))
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
-            ctk.CTkLabel(admin_archived_inventory_frame, text=item['entered_by'], font=ctk.CTkFont(size=13)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(admin_archived_inventory_frame, text=item['entered_by'], font=ctk.CTkFont(size=13))
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
             created_str = item['created_at'].replace('T', ' ')[:16] if 'T' in item['created_at'] else item['created_at'][:16]
-            ctk.CTkLabel(admin_archived_inventory_frame, text=created_str, font=ctk.CTkFont(size=13)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(admin_archived_inventory_frame, text=created_str, font=ctk.CTkFont(size=13))
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
             col += 1
             archived_str = item['imported_at'].replace('T', ' ')[:16] if 'T' in item['imported_at'] else item['imported_at'][:16]
-            ctk.CTkLabel(admin_archived_inventory_frame, text=archived_str, font=ctk.CTkFont(size=13)).grid(
-                row=row, column=col, padx=5, pady=3, sticky="w")
+            lbl = ctk.CTkLabel(admin_archived_inventory_frame, text=archived_str, font=ctk.CTkFont(size=13))
+            lbl.grid(row=row, column=col, padx=5, pady=3, sticky="w")
+            row_labels.append(lbl)
+
+            all_row_labels.append(row_labels)
+            for lbl in row_labels:
+                lbl.bind("<Button-1>", lambda e, rl=row_labels, ar=all_row_labels: self._highlight_inventory_row(rl, ar))
 
         # Update pagination buttons
         page = self.admin_project_widgets[project]['archived_page']
@@ -2084,7 +2375,7 @@ Start-Sleep -Seconds 3
         """Show dialog to edit an inventory item from admin view."""
         dialog = ctk.CTkToplevel(self)
         dialog.title(f"Edit Item - {item['item_sku']}")
-        dialog_height = 510 if project != "halo" else 450
+        dialog_height = 560 if project == "ecoflow" else (510 if project != "halo" else 450)
         dialog.geometry(f"400x{dialog_height}")
         dialog.resizable(False, False)
         dialog.transient(self)
@@ -2118,6 +2409,14 @@ Start-Sleep -Seconds 3
             order_entry.insert(0, item.get('order_number', ''))
             order_entry.pack(pady=(0, 15))
 
+        # PO # (EcoFlow only)
+        tracking_entry = None
+        if project == "ecoflow":
+            ctk.CTkLabel(frame, text="PO #", font=ctk.CTkFont(size=14)).pack(anchor="w")
+            tracking_entry = ctk.CTkEntry(frame, width=300, font=ctk.CTkFont(size=14))
+            tracking_entry.insert(0, item.get('tracking_number', ''))
+            tracking_entry.pack(pady=(0, 15))
+
         # Repair State
         ctk.CTkLabel(frame, text="Repair State", font=ctk.CTkFont(size=14)).pack(anchor="w")
         repair_options = ["RTV", "Tested Good", "Needs Repair", "Damaged", "Unknown"]
@@ -2138,6 +2437,7 @@ Start-Sleep -Seconds 3
             lpn = lpn_entry.get().strip()
             repair_state = repair_dropdown.get()
             order_number = order_entry.get().strip() if order_entry else ""
+            tracking_number = tracking_entry.get().strip() if tracking_entry else ""
 
             if not sku or not serial or not lpn:
                 status_label.configure(text="All fields are required", text_color="red")
@@ -2150,7 +2450,7 @@ Start-Sleep -Seconds 3
                 self._play_error_sound()
                 return
 
-            if update_inventory_item(item['id'], sku, serial, lpn, item.get('location', ''), repair_state, project, order_number):
+            if update_inventory_item(item['id'], sku, serial, lpn, item.get('location', ''), repair_state, project, order_number, tracking_number):
                 dialog.destroy()
                 self._refresh_admin_active_inventory(project)
                 self._play_success_sound()
@@ -2550,6 +2850,7 @@ Start-Sleep -Seconds 3
         location = widgets['location_dropdown'].get()
         repair_state = widgets['repair_dropdown'].get() if widgets['repair_dropdown'] else ""
         order_number = widgets['order_entry'].get().strip() if widgets['order_entry'] else ""
+        tracking_number = widgets['tracking_entry'].get().strip() if widgets['tracking_entry'] else ""
 
         # Basic validation
         if not sku:
@@ -2590,7 +2891,8 @@ Start-Sleep -Seconds 3
                 repair_state=repair_state,
                 entered_by=self.user['username'],
                 project=project,
-                order_number=order_number
+                order_number=order_number,
+                tracking_number=tracking_number
             )
             self._show_admin_status("Entry submitted successfully", project, error=False)
             self._play_success_sound()
@@ -2604,6 +2906,8 @@ Start-Sleep -Seconds 3
         widgets['lpn_entry'].delete(0, 'end')
         if widgets['order_entry']:
             widgets['order_entry'].delete(0, 'end')
+        if widgets['tracking_entry']:
+            widgets['tracking_entry'].delete(0, 'end')
         if widgets['repair_dropdown']:
             widgets['repair_dropdown'].set(widgets['repair_options'][0])
 

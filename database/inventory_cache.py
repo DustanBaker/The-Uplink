@@ -92,6 +92,7 @@ def init_local_inventory_cache(project: str = "ecoflow"):
             entered_by TEXT NOT NULL,
             created_at TEXT NOT NULL,
             order_number TEXT DEFAULT '',
+            tracking_number TEXT DEFAULT '',
             sync_status TEXT DEFAULT 'pending',
             remote_id INTEGER DEFAULT NULL,
             last_modified TEXT NOT NULL
@@ -110,7 +111,8 @@ def init_local_inventory_cache(project: str = "ecoflow"):
             entered_by TEXT NOT NULL,
             created_at TEXT NOT NULL,
             imported_at TEXT NOT NULL,
-            order_number TEXT DEFAULT ''
+            order_number TEXT DEFAULT '',
+            tracking_number TEXT DEFAULT ''
         )
     """)
 
@@ -121,6 +123,23 @@ def init_local_inventory_cache(project: str = "ecoflow"):
             value TEXT
         )
     """)
+
+    # CSV serial numbers table (for Halo duplicate detection)
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS csv_serials (
+            serial_number TEXT PRIMARY KEY
+        )
+    """)
+
+    # Add tracking_number column if it doesn't exist (for existing local databases)
+    try:
+        cursor.execute("ALTER TABLE inventory ADD COLUMN tracking_number TEXT DEFAULT ''")
+    except:
+        pass
+    try:
+        cursor.execute("ALTER TABLE imported_inventory ADD COLUMN tracking_number TEXT DEFAULT ''")
+    except:
+        pass
 
     conn.commit()
     conn.close()
@@ -142,6 +161,7 @@ def add_inventory_item_cached(
     entered_by: str,
     location: str = "",
     order_number: str = "",
+    tracking_number: str = "",
     project: str = "ecoflow"
 ) -> bool:
     """Add an inventory item to local cache. Syncs to remote in background."""
@@ -154,9 +174,9 @@ def add_inventory_item_cached(
             now = datetime.now().isoformat()
             cursor.execute("""
                 INSERT INTO inventory
-                (item_sku, serial_number, lpn, location, repair_state, entered_by, created_at, order_number, sync_status, last_modified)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
-            """, (item_sku, serial_number, lpn, location, repair_state, entered_by, now, order_number, now))
+                (item_sku, serial_number, lpn, location, repair_state, entered_by, created_at, order_number, tracking_number, sync_status, last_modified)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending', ?)
+            """, (item_sku, serial_number, lpn, location, repair_state, entered_by, now, order_number, tracking_number, now))
 
             conn.commit()
             return True
@@ -177,6 +197,7 @@ def update_inventory_item_cached(
     repair_state: str,
     location: str = "",
     order_number: str = "",
+    tracking_number: str = "",
     project: str = "ecoflow"
 ) -> bool:
     """Update an inventory item in local cache."""
@@ -190,9 +211,9 @@ def update_inventory_item_cached(
             cursor.execute("""
                 UPDATE inventory
                 SET item_sku = ?, serial_number = ?, lpn = ?, location = ?,
-                    repair_state = ?, order_number = ?, sync_status = 'pending', last_modified = ?
+                    repair_state = ?, order_number = ?, tracking_number = ?, sync_status = 'pending', last_modified = ?
                 WHERE id = ?
-            """, (item_sku, serial_number, lpn, location, repair_state, order_number, now, item_id))
+            """, (item_sku, serial_number, lpn, location, repair_state, order_number, tracking_number, now, item_id))
 
             conn.commit()
             return True
@@ -246,7 +267,7 @@ def get_all_inventory_cached(project: str = "ecoflow", limit: int = None, offset
 
         query = """
             SELECT id, item_sku, serial_number, lpn, location, repair_state,
-                   entered_by, created_at, order_number, sync_status
+                   entered_by, created_at, order_number, tracking_number, sync_status
             FROM inventory
             ORDER BY created_at DESC
         """
@@ -269,7 +290,8 @@ def get_all_inventory_cached(project: str = "ecoflow", limit: int = None, offset
                 "entered_by": row[6],
                 "created_at": row[7],
                 "order_number": row[8] or '',
-                "sync_status": row[9]
+                "tracking_number": row[9] or '',
+                "sync_status": row[10]
             }
             for row in rows
         ]
@@ -296,6 +318,76 @@ def get_inventory_count_cached(project: str = "ecoflow") -> int:
             conn.close()
 
 
+def search_inventory_cached(search_term: str, project: str = "ecoflow", limit: int = None, offset: int = 0) -> list[dict]:
+    """Search inventory items in local cache across all text fields."""
+    conn = None
+    try:
+        conn = _get_local_connection(project)
+        cursor = conn.cursor()
+
+        like = f"%{search_term}%"
+        query = """
+            SELECT id, item_sku, serial_number, lpn, location, repair_state,
+                   entered_by, created_at, order_number, tracking_number, sync_status
+            FROM inventory
+            WHERE item_sku LIKE ? OR serial_number LIKE ? OR lpn LIKE ?
+               OR order_number LIKE ? OR tracking_number LIKE ? OR location LIKE ?
+               OR repair_state LIKE ? OR entered_by LIKE ?
+            ORDER BY created_at DESC
+        """
+        params = [like] * 8
+        if limit:
+            query += f" LIMIT {limit}"
+            if offset:
+                query += f" OFFSET {offset}"
+
+        cursor.execute(query, params)
+        rows = cursor.fetchall()
+
+        return [
+            {
+                "id": row[0],
+                "item_sku": row[1],
+                "serial_number": row[2],
+                "lpn": row[3],
+                "location": row[4] or '',
+                "repair_state": row[5],
+                "entered_by": row[6],
+                "created_at": row[7],
+                "order_number": row[8] or '',
+                "tracking_number": row[9] or '',
+                "sync_status": row[10]
+            }
+            for row in rows
+        ]
+    except Exception:
+        return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def search_inventory_count_cached(search_term: str, project: str = "ecoflow") -> int:
+    """Get count of inventory items matching search term."""
+    conn = None
+    try:
+        conn = _get_local_connection(project)
+        cursor = conn.cursor()
+        like = f"%{search_term}%"
+        cursor.execute("""
+            SELECT COUNT(*) FROM inventory
+            WHERE item_sku LIKE ? OR serial_number LIKE ? OR lpn LIKE ?
+               OR order_number LIKE ? OR tracking_number LIKE ? OR location LIKE ?
+               OR repair_state LIKE ? OR entered_by LIKE ?
+        """, [like] * 8)
+        return cursor.fetchone()[0]
+    except Exception:
+        return 0
+    finally:
+        if conn:
+            conn.close()
+
+
 def get_all_imported_inventory_cached(project: str = "ecoflow", limit: int = None, offset: int = 0) -> list[dict]:
     """Get imported inventory from local cache."""
     conn = None
@@ -305,7 +397,7 @@ def get_all_imported_inventory_cached(project: str = "ecoflow", limit: int = Non
 
         query = """
             SELECT id, item_sku, serial_number, lpn, location, repair_state,
-                   entered_by, created_at, imported_at, order_number
+                   entered_by, created_at, imported_at, order_number, tracking_number
             FROM imported_inventory
             ORDER BY imported_at DESC, created_at DESC
         """
@@ -328,7 +420,8 @@ def get_all_imported_inventory_cached(project: str = "ecoflow", limit: int = Non
                 "entered_by": row[6],
                 "created_at": row[7],
                 "imported_at": row[8],
-                "order_number": row[9] or ''
+                "order_number": row[9] or '',
+                "tracking_number": row[10] or ''
             }
             for row in rows
         ]
@@ -360,6 +453,49 @@ def get_imported_inventory_count_cached(project: str = "ecoflow") -> int:
             conn.close()
 
 
+# ==================== CSV Serial Number Upload (Halo Duplicate Detection) ====================
+
+def save_csv_serials(serials: list, project: str = "halo"):
+    """Replace stored CSV serial numbers with a new set.
+
+    Clears all previous data and inserts the new list.
+    Used for Halo duplicate serial number detection.
+    """
+    conn = None
+    try:
+        conn = _get_local_connection(project)
+        cursor = conn.cursor()
+        cursor.execute("DELETE FROM csv_serials")
+        cursor.executemany(
+            "INSERT OR IGNORE INTO csv_serials (serial_number) VALUES (?)",
+            [(s,) for s in serials]
+        )
+        conn.commit()
+    except Exception:
+        pass
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_csv_serials(project: str = "halo") -> set:
+    """Get the set of serial numbers from the last CSV upload.
+
+    Returns an empty set if no CSV has been uploaded or on error.
+    """
+    conn = None
+    try:
+        conn = _get_local_connection(project)
+        cursor = conn.cursor()
+        cursor.execute("SELECT serial_number FROM csv_serials")
+        return {row[0] for row in cursor.fetchall()}
+    except Exception:
+        return set()
+    finally:
+        if conn:
+            conn.close()
+
+
 # ==================== Background Sync ====================
 
 def _sync_to_remote(project: str):
@@ -372,13 +508,21 @@ def _sync_to_remote(project: str):
 
         local_cursor.execute("""
             SELECT id, item_sku, serial_number, lpn, location, repair_state,
-                   entered_by, created_at, order_number
+                   entered_by, created_at, order_number, tracking_number
             FROM inventory
             WHERE sync_status = 'pending'
         """)
         pending_items = local_cursor.fetchall()
 
-        if not pending_items:
+        # Collect pending deletions from metadata
+        prefix = f"delete_{project}_"
+        local_cursor.execute(
+            "SELECT key, value FROM sync_metadata WHERE key LIKE ?",
+            (f"{prefix}%",)
+        )
+        pending_deletes = local_cursor.fetchall()
+
+        if not pending_items and not pending_deletes:
             return
 
         remote_conn = _get_remote_connection(project)
@@ -390,8 +534,8 @@ def _sync_to_remote(project: str):
                 remote_cursor.execute("""
                     INSERT OR REPLACE INTO inventory
                     (item_sku, serial_number, lpn, location, repair_state,
-                     entered_by, created_at, order_number)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                     entered_by, created_at, order_number, tracking_number)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """, item[1:])
 
                 remote_id = remote_cursor.lastrowid
@@ -402,6 +546,16 @@ def _sync_to_remote(project: str):
                     WHERE id = ?
                 """, (remote_id, local_id))
             except Exception:
+                continue
+
+        # Process pending deletions: delete from remote and clean up metadata
+        for key, _value in pending_deletes:
+            remote_id_str = key[len(prefix):]
+            try:
+                remote_id = int(remote_id_str)
+                remote_cursor.execute("DELETE FROM inventory WHERE id = ?", (remote_id,))
+                local_cursor.execute("DELETE FROM sync_metadata WHERE key = ?", (key,))
+            except (ValueError, Exception):
                 continue
 
         remote_conn.commit()
@@ -435,7 +589,7 @@ def _sync_from_remote(project: str):
 
         remote_cursor.execute("""
             SELECT id, item_sku, serial_number, lpn, location, repair_state,
-                   entered_by, created_at, order_number
+                   entered_by, created_at, order_number, tracking_number
             FROM inventory
             ORDER BY created_at DESC
         """)
@@ -444,18 +598,33 @@ def _sync_from_remote(project: str):
         local_cursor.execute("SELECT serial_number FROM inventory WHERE sync_status = 'synced'")
         local_synced_serials = {row[0] for row in local_cursor.fetchall()}
 
+        # Load pending deletion remote IDs so we don't re-insert deleted items
+        prefix = f"delete_{project}_"
+        local_cursor.execute(
+            "SELECT key FROM sync_metadata WHERE key LIKE ?",
+            (f"{prefix}%",)
+        )
+        pending_delete_ids = set()
+        for (key,) in local_cursor.fetchall():
+            try:
+                pending_delete_ids.add(int(key[len(prefix):]))
+            except ValueError:
+                pass
+
         remote_serials = set()
         for item in remote_items:
-            remote_id, sku, serial, lpn, loc, state, entered, created, order = item
+            remote_id, sku, serial, lpn, loc, state, entered, created, order, tracking = item
             remote_serials.add(serial)
+            if remote_id in pending_delete_ids:
+                continue  # Skip items pending deletion
             if serial not in local_synced_serials:
                 try:
                     local_cursor.execute("""
                         INSERT INTO inventory
                         (item_sku, serial_number, lpn, location, repair_state,
-                         entered_by, created_at, order_number, sync_status, remote_id, last_modified)
-                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?)
-                    """, (sku, serial, lpn, loc, state, entered, created, order, remote_id, created))
+                         entered_by, created_at, order_number, tracking_number, sync_status, remote_id, last_modified)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'synced', ?, ?)
+                    """, (sku, serial, lpn, loc, state, entered, created, order, tracking, remote_id, created))
                 except sqlite3.IntegrityError:
                     pass
 
