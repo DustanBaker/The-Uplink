@@ -865,12 +865,17 @@ Start-Sleep -Seconds 3
             tracking_entry.insert(0, item.get('tracking_number', ''))
             tracking_entry.pack(pady=(2, 8))
 
-        # Repair State
-        ctk.CTkLabel(frame, text="Repair State", font=ctk.CTkFont(size=14)).pack(anchor="w")
-        repair_options = ["Temporary Storage","To be repaired", "To be refurbished","To be Scrapped","Storage only","Good Spare Parts","Refurbished","Repaired","Defective Products"]
-        repair_dropdown = ctk.CTkOptionMenu(frame, width=340, values=repair_options, font=ctk.CTkFont(size=14))
-        repair_dropdown.set(item['repair_state'])
-        repair_dropdown.pack(pady=(2, 10))
+        # Repair State (EcoFlow only)
+        repair_dropdown = None
+        if project == "ecoflow":
+            ctk.CTkLabel(frame, text="Repair State", font=ctk.CTkFont(size=14)).pack(anchor="w")
+            repair_options = ["Temporary Storage","To be repaired", "To be refurbished","To be Scrapped","Storage only","Good Spare Parts","Refurbished","Repaired","Defective Products"]
+            repair_dropdown = ctk.CTkOptionMenu(frame, width=340, values=repair_options, font=ctk.CTkFont(size=14))
+            if item['repair_state'] in repair_options:
+                repair_dropdown.set(item['repair_state'])
+            else:
+                repair_dropdown.set(repair_options[0])
+            repair_dropdown.pack(pady=(2, 10))
 
         # Status
         status_label = ctk.CTkLabel(frame, text="", text_color="red", font=ctk.CTkFont(size=14))
@@ -880,7 +885,7 @@ Start-Sleep -Seconds 3
             sku = sku_entry.get().strip()
             serial = serial_entry.get().strip()
             lpn = lpn_entry.get().strip()
-            repair_state = repair_dropdown.get()
+            repair_state = repair_dropdown.get() if repair_dropdown else ""
             order_number = order_entry.get().strip() if order_entry else ""
             tracking_number = tracking_entry.get().strip() if tracking_entry else ""
 
@@ -895,7 +900,7 @@ Start-Sleep -Seconds 3
                 self._play_error_sound()
                 return
 
-            if update_inventory_item(item['id'], sku, serial, lpn, item.get('location', ''), repair_state, project, order_number, tracking_number):
+            if update_inventory_item(item['id'], sku, serial, lpn, repair_state, item.get('location', ''), order_number, tracking_number, project):
                 dialog.destroy()
                 self._refresh_inventory_list(project)
                 self._show_user_status("Item updated successfully", project, error=False)
@@ -2417,15 +2422,17 @@ Start-Sleep -Seconds 3
             tracking_entry.insert(0, item.get('tracking_number', ''))
             tracking_entry.pack(pady=(0, 15))
 
-        # Repair State
-        ctk.CTkLabel(frame, text="Repair State", font=ctk.CTkFont(size=14)).pack(anchor="w")
-        repair_options = ["RTV", "Tested Good", "Needs Repair", "Damaged", "Unknown"]
-        repair_dropdown = ctk.CTkOptionMenu(frame, values=repair_options, width=300)
-        if item['repair_state'] in repair_options:
-            repair_dropdown.set(item['repair_state'])
-        else:
-            repair_dropdown.set(repair_options[0])
-        repair_dropdown.pack(pady=(0, 15))
+        # Repair State (EcoFlow only)
+        repair_dropdown = None
+        if project == "ecoflow":
+            ctk.CTkLabel(frame, text="Repair State", font=ctk.CTkFont(size=14)).pack(anchor="w")
+            repair_options = ["Temporary Storage","To be repaired", "To be refurbished","To be Scrapped","Storage only","Good Spare Parts","Refurbished","Repaired","Defective Products"]
+            repair_dropdown = ctk.CTkOptionMenu(frame, values=repair_options, width=300)
+            if item['repair_state'] in repair_options:
+                repair_dropdown.set(item['repair_state'])
+            else:
+                repair_dropdown.set(repair_options[0])
+            repair_dropdown.pack(pady=(0, 15))
 
         # Status label
         status_label = ctk.CTkLabel(frame, text="", font=ctk.CTkFont(size=12))
@@ -2435,7 +2442,7 @@ Start-Sleep -Seconds 3
             sku = sku_entry.get().strip()
             serial = serial_entry.get().strip()
             lpn = lpn_entry.get().strip()
-            repair_state = repair_dropdown.get()
+            repair_state = repair_dropdown.get() if repair_dropdown else ""
             order_number = order_entry.get().strip() if order_entry else ""
             tracking_number = tracking_entry.get().strip() if tracking_entry else ""
 
@@ -2450,7 +2457,7 @@ Start-Sleep -Seconds 3
                 self._play_error_sound()
                 return
 
-            if update_inventory_item(item['id'], sku, serial, lpn, item.get('location', ''), repair_state, project, order_number, tracking_number):
+            if update_inventory_item(item['id'], sku, serial, lpn, repair_state, item.get('location', ''), order_number, tracking_number, project):
                 dialog.destroy()
                 self._refresh_admin_active_inventory(project)
                 self._play_success_sound()
